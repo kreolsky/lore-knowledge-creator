@@ -164,7 +164,8 @@ def _guarded(raw_funcs: list) -> list:
     #       name checks and the enqueue-site function names are unaffected.
     Applied to BOTH worker classes so a divergence refuses every user-facing job; cron
     jobs are unguarded (idempotent maintenance)."""
-    return [func(stale_code_guard(f.coroutine), max_tries=f.max_tries) for f in raw_funcs]
+    return [func(stale_code_guard(f.coroutine), max_tries=f.max_tries, timeout=f.timeout_s)
+            for f in raw_funcs]
 
 
 def _configure_app_logging() -> None:
@@ -257,7 +258,12 @@ class WorkerSettings:
         func(chat_index_sweep_task, max_tries=1),
         # chat topics: the pair reconcile, the deferred turn-end idle check and
         # the hourly sweep — max_tries=1 for the same reason (idempotent).
-        func(chat_topics_pair_task, max_tries=1),
+        # WHY the timeout on the pair task: a run is several model calls behind a
+        # one-call slot shared by every pair, and a long chat's re-label is saved
+        # only at its end — arq's default 300s would cut it off every hour.
+        # WHY no more than 900: the largest timeout of a queue is how long EVERY job
+        # a killed worker held stays locked (arq in_progress_timeout_s).
+        func(chat_topics_pair_task, max_tries=1, timeout=900),
         func(chat_topics_idle_task, max_tries=1),
         func(chat_topics_sweep_task, max_tries=1),
         func(thumbnail_task, max_tries=4),

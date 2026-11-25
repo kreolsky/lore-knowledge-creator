@@ -401,7 +401,7 @@ async def test_import_file_md_table_becomes_object_with_mention_edge(
             scope_root=None,
         )
         assert result["status"] == "applied"
-        return result["doc_id"]
+        return result["document_id"]
 
     doc_id = await _import("notes.md")
     db = await get_db()

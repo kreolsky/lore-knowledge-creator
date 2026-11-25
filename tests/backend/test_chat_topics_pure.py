@@ -1,32 +1,83 @@
 """chat topics — the answer parse and the window stitching, pure (no DB, no model)."""
 
-from jobs.tasks.chat_topics import merge_window, parse_topics
+import json
+
+from jobs.tasks.chat_topics_answer import merge_window, own_words, parse_topics
+
+
+def _ex(mid: str, said: str = "") -> dict:
+    return {"id": mid, "said": own_words(said), "user": said, "asst": ""}
+
+
+def _parsed(text: str, window: list[dict]) -> list[dict]:
+    return parse_topics(text, window)[0]
 
 
 # TEST-WHY: pure-logic-edge — a second window's equal title must join the frozen topic while the first window's unfrozen exchanges are relabelled, never kept twice.
 def test_second_window_stitches_by_title_and_drops_stale_unfrozen_labels():
-    order = ["m0", "m1", "m2", "m3"]
-    first = parse_topics(
-        '<think>x</think>[{"title": "Томаты", "synopsis": "s", "turns": [0, 7]}, '
-        '{"title": "Цепь", "synopsis": "c", "turns": [2]}]',
-        ["m0", "m1", "m2"],
+    chat = [_ex(m) for m in ("m0", "m1", "m2", "m3")]
+    first = _parsed(
+        '<think>x</think>[{"title": "Томаты", "synopsis": "s", "turns": [0, 7], "outcome": "open"}, '
+        '{"title": "Цепь", "synopsis": "c", "turns": [2], "kind": "nonsense"}]',
+        chat[:3],
     )
     # turn 7 is outside the window; m1 is uncovered and inherits m0's topic
-    assert [(t["title"], t["message_ids"]) for t in first] == [
-        ("Томаты", ["m0", "m1"]), ("Цепь", ["m2"])]
+    assert [(t["title"], t["message_ids"], t["kind"], t["outcome"]) for t in first] == [
+        ("Томаты", ["m0", "m1"], "other", "open"), ("Цепь", ["m2"], "other", "none")]
     empty = {"frozen_ids": [], "labelled_ids": [], "topics": []}
-    toc = merge_window(empty, order, ["m0", "m1"], first[:1], freeze=True)
-    toc = merge_window(toc, order, ["m2"], first[1:], freeze=False)
+    toc = merge_window(empty, chat, ["m0", "m1"], first[:1], freeze=True)
+    toc = merge_window(toc, chat, ["m2"], first[1:], freeze=False)
     assert toc["frozen_ids"] == ["m0", "m1"] and toc["labelled_ids"] == ["m0", "m1", "m2"]
 
-    second = parse_topics('[{"title": "Томаты", "synopsis": "new", "turns": [1]}, '
-                          '{"title": "Аквариум", "synopsis": "a", "turns": [0]}]', ["m2", "m3"])
-    toc = merge_window(toc, order, ["m2", "m3"], second, freeze=False)
+    second = _parsed('[{"title": "Томаты", "synopsis": "new", "kind": "bug", "turns": [1]}, '
+                     '{"title": "Аквариум", "synopsis": "a", "turns": [0]}]', chat[2:])
+    toc = merge_window(toc, chat, ["m2", "m3"], second, freeze=False)
     assert [(t["title"], t["synopsis"], t["message_ids"], t["frozen"]) for t in toc["topics"]] == [
         ("Томаты", "s", ["m0", "m1", "m3"], False),
         ("Аквариум", "a", ["m2"], False),
     ]
-    assert parse_topics("no array here", ["m0"]) == []
+    # the continued topic: the later kind replaces only `other`, the later `none` never an outcome
+    assert (toc["topics"][0]["kind"], toc["topics"][0]["outcome"]) == ("bug", "open")
+    assert _parsed("no array here", chat[:1]) == []
+
+
+# TEST-WHY: pure-logic-edge — INVARIANT(security) in verified_marks: only a whole, in-limits quote the USER wrote in the topic's own exchanges is stored; another topic's words, quoted assistant lines and invented quotes are dropped.
+def test_a_mark_is_kept_only_with_the_users_own_words():
+    chat = [_ex("m0", "Группу А  терпеть\nне могу!"), _ex("m1", "> группа Б прекрасна\n\nпочему?")]
+
+    def kept(mark: dict) -> list[dict]:
+        text = json.dumps([{"title": "A", "turns": [0], "marks": [mark]},
+                           {"title": "B", "turns": [1]}])
+        topics, returned, n = parse_topics(text, chat)
+        assert (returned, n) == (1, len(topics[0]["marks"]))
+        return topics[0]["marks"]
+
+    good = {"about": "группа А", "attitude": "не терпит", "quote": "терпеть не  МОГУ"}
+    assert kept(good) == [{**good, "quote": "терпеть не МОГУ"}]
+    for bad in ({"quote": "почему?"}, {"quote": "обожаю"}, {"quote": " "}, {"quote": "Группу" * 30},
+                {"attitude": "х" * 41}, {"attitude": ""}, {"about": "х" * 81}, {"quote": 5},
+                {"quote": "могу"}, {"quote": "рпеть не могу"}, {"quote": "Группу А терп"}):
+        assert kept({**good, **bad}) == []
+    quoted = json.dumps([{"title": "B", "turns": [0], "marks": [
+        {"about": "Б", "attitude": "нравится", "quote": "группа Б прекрасна"}]}])
+    assert _parsed(quoted, chat[1:])[0]["marks"] == []
+
+
+# TEST-WHY: pure-logic-edge — INVARIANT(security) in _trimmed: a joined topic cut back to its frozen exchanges loses a mark quoted from the cut one, or the quote survives that exchange's edit.
+def test_a_mark_does_not_outlive_the_exchange_it_quotes():
+    def found(mid_said: dict, quote: str) -> list[dict]:
+        return _parsed(json.dumps([{"title": "T", "turns": [0], "marks": [
+            {"about": "", "attitude": "рад", "quote": quote}]}]), [mid_said])
+
+    chat = [_ex("m0", "первое"), _ex("m1", "второе")]
+    empty = {"frozen_ids": [], "labelled_ids": [], "topics": []}
+    toc = merge_window(empty, chat, ["m0"], found(chat[0], "первое"), freeze=True)
+    toc = merge_window(toc, chat, ["m1"], found(chat[1], "второе"), freeze=False)
+    assert [m["quote"] for m in toc["topics"][0]["marks"]] == ["первое", "второе"]
+    again = _parsed('[{"title": "U", "turns": [0]}]', chat[1:])
+    toc = merge_window(toc, chat, ["m1"], again, freeze=False)
+    assert [(t["title"], [m["quote"] for m in t["marks"]]) for t in toc["topics"]] == [
+        ("T", ["первое"]), ("U", [])]
 
 
 class _RowsDB:

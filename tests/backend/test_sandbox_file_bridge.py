@@ -304,7 +304,7 @@ async def test_upload_document_sandbox_path_md_creates_document(
 
     # The document content landed.
     rd = await client.get(
-        f"/api/documents/{data['doc_id']}", cookies={"lore_session": token},
+        f"/api/documents/{data['document_id']}", cookies={"lore_session": token},
     )
     assert "Some body text" in rd.json().get("content", "")
 
@@ -351,9 +351,9 @@ async def test_fetch_reference_writes_to_deterministic_inbox(
     client, test_db, project_with_doc, sftp_seams,
 ):
     """A reference in the acting project is copied into the workspace at
-    {ws}/inbox/{ref_id}/{safe_name}. The source path is READ from the reference row
+    {ws}/inbox/{reference_id}/{safe_name}. The source path is READ from the reference row
     (file_path), never reconstructed from an agent filename — the agent holds only
-    ref_id and cannot know safe_name."""
+    reference_id and cannot know safe_name."""
     pid, _, uid = project_with_doc
     ref_id = f"fb-ref-{secrets.token_hex(4)}"
     safe = "chart.png"
@@ -361,7 +361,7 @@ async def test_fetch_reference_writes_to_deterministic_inbox(
     token = await _make_key(uid, pid, internal=True)
 
     resp = await client.post("/api/tool/sandbox_fetch_reference", json={
-        "ref_id": ref_id,
+        "reference_id": ref_id,
     }, headers=_hdr(token))
     assert resp.status_code == 200, resp.text
     data = resp.json()
@@ -394,7 +394,7 @@ async def test_fetch_reference_rejects_foreign_project(
     token = await _make_key(uid, pid, internal=True)
 
     resp = await client.post("/api/tool/sandbox_fetch_reference", json={
-        "ref_id": ref_id,
+        "reference_id": ref_id,
     }, headers=_hdr(token))
     assert resp.status_code in (403, 404), resp.text
     assert sftp_seams["write_calls"] == [], "wrote a foreign-project reference"
@@ -412,7 +412,7 @@ async def test_fetch_reference_rejects_commentator(
     token = await _make_key(guest, pid, internal=True)
 
     resp = await client.post("/api/tool/sandbox_fetch_reference", json={
-        "ref_id": ref_id,
+        "reference_id": ref_id,
     }, headers=_hdr(token))
     assert resp.status_code == 403, resp.text
     assert sftp_seams["write_calls"] == []
@@ -443,7 +443,7 @@ async def test_artifact_page_replace_round_trip_and_refusals(client, test_db, pr
         "node_type": "html", "apply": "auto",
     }, headers=_hdr(agent_tok))
     assert resp.status_code == 200, resp.text
-    doc_id = resp.json()["doc_id"]
+    doc_id = resp.json()["document_id"]
 
     # Fetch: the live page source lands at artifacts/<id>/index.html — the
     # seam records {path, size}, and the size is the LIVE body's byte length.
@@ -452,7 +452,7 @@ async def test_artifact_page_replace_round_trip_and_refusals(client, test_db, pr
     }, headers=_hdr(agent_tok))
     assert resp.status_code == 200, resp.text
     fetched = resp.json()
-    assert fetched["doc_id"] == doc_id
+    assert fetched["document_id"] == doc_id
     assert fetched["path"].endswith(f"/artifacts/{doc_id}/index.html")
     assert any(
         w["path"].endswith(f"/artifacts/{doc_id}/index.html")
@@ -485,7 +485,7 @@ async def test_artifact_page_replace_round_trip_and_refusals(client, test_db, pr
         "document_id": doc_id, "sandbox_path": page_path, "apply": "auto",
     }, headers=_hdr(agent_tok))
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"status": "applied", "doc_id": doc_id, "changed": True}
+    assert resp.json() == {"status": "applied", "document_id": doc_id, "changed": True}
 
     from cp_store import resolve_checkpoint_content
 
@@ -548,7 +548,7 @@ async def test_artifact_page_replace_round_trip_and_refusals(client, test_db, pr
         "parent_id": parent,
     }, headers=_hdr(agent_tok))
     assert resp.status_code == 200, resp.text
-    near_id = resp.json()["doc_id"]
+    near_id = resp.json()["document_id"]
 
     resp = await client.post("/api/tool/edit_document", json={
         "document_id": near_id,

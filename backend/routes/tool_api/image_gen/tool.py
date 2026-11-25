@@ -124,7 +124,7 @@ async def tool_generate_image(
     arq task with the admin workflow, size and prompt template, and returns
     at once:
 
-        {status:"generating", run_id, doc_id}
+        {status:"generating", run_id, document_id}
 
     The ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process
     task — the web process is reload-volatile and a create_task dies with an
@@ -238,4 +238,4 @@ async def tool_generate_image(
         },
         job_id=run_id,
     )
-    return {"status": "generating", "run_id": run_id, "doc_id": parent_doc_id}
+    return {"status": "generating", "run_id": run_id, "document_id": parent_doc_id}

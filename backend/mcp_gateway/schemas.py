@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from agent_tools.registry import (
     ROOT_SENTINEL,
+    entries,
     fill_properties_root,
     fill_root,
     mcp_entries,
@@ -59,7 +60,7 @@ _AGENT_TOOL_OUTPUT_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "status": {"type": "string"},
-        "doc_id": {"type": "string"},
+        "document_id": {"type": "string"},
         "reference_id": {"type": "string"},
         "detail": {"type": "string"},
         "noop": {"type": "boolean"},
@@ -74,7 +75,7 @@ _READ_TOOL_OUTPUT_SCHEMAS: dict[str, dict] = {
     "read_document": {
         "type": "object",
         "properties": {
-            "doc_id": {"type": "string"},
+            "document_id": {"type": "string"},
             "title": {"type": "string"},
             "content": {"type": "string"},
             # Read-path spill bound: the slice
@@ -137,7 +138,7 @@ _READ_TOOL_OUTPUT_SCHEMAS: dict[str, dict] = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "doc_id": {"type": "string"},
+                        "document_id": {"type": "string"},
                         "parent_id": {"type": ["string", "null"]},
                         "title": {"type": "string"},
                         "snippet": {"type": "string"},
@@ -215,7 +216,7 @@ _READ_TOOL_OUTPUT_SCHEMAS: dict[str, dict] = {
         "type": "object",
         "properties": {
             "status": {"type": "string"},
-            "root_id": {"type": "string"},
+            "document_id": {"type": "string"},
             "url": {"type": "string"},
             "path": {"type": "string"},
             "filename": {"type": "string"},
@@ -356,6 +357,79 @@ _GATEWAY_OUTPUT_SCHEMAS: dict[str, dict] = {
         },
     },
 }
+
+
+# WHY closed: a ban on the three old words (`doc_id`, `root_id`, `ref_id`) would
+# let the next second name (`node_id`, `page_id`) through; a name outside this
+# list fails the import-time assert below until it is added here by a deliberate
+# edit. A role of its own (a host, a target, a checkpoint) earns its qualified
+# name; a plain document or reference never does. `id` is OUTPUT-only (the
+# listing rows of search `sources`), never an argument.
+_ID_PROPERTIES: frozenset[str] = frozenset({
+    "document_id", "document_ids", "parent_id", "reference_id",
+    "completed_reference_id", "config_doc_id", "target_doc_id",
+    "source_doc_id", "under_document_id", "start_id", "after_id", "fact_id",
+    "absorb_id", "ids", "table_id", "message_id", "chat_id", "run_id",
+    "config_id", "staged_id", "checkpoint_id", "from_checkpoint_id",
+    "before_checkpoint_id", "subject_user_ids", "project_id",
+})
+_OUTPUT_ONLY_ID_PROPERTIES: frozenset[str] = frozenset({"id"})
+
+
+def _is_id_property(name: str) -> bool:
+    return (
+        name in ("id", "ids")
+        or name.endswith("_id")
+        or name.endswith("_ids")
+    )
+
+
+def _declared_id_properties(schema, path: str):
+    """(path, name) of every id-like property name declared anywhere in a
+    schema — nested `items.properties`, `anyOf` members and all."""
+    if isinstance(schema, dict):
+        props = schema.get("properties")
+        if isinstance(props, dict):
+            for name in props:
+                if _is_id_property(name):
+                    yield f"{path}.{name}", name
+        for key, sub in schema.items():
+            yield from _declared_id_properties(sub, f"{path}.{key}")
+    elif isinstance(schema, list):
+        for i, sub in enumerate(schema):
+            yield from _declared_id_properties(sub, f"{path}[{i}]")
+
+
+# INVARIANT: a document is `document_id` and a reference is `reference_id`
+# in EVERY argument a tool takes and EVERY answer it declares — one name per
+# thing, in and out. Why: an agent that got a document from one tool passes
+# its id to the next under the name the first tool answered, so a second name
+# is a refused call between the two. Reach: DECLARED names only — a handler
+# answering a key it never declared is outside this walk.
+def _second_name_defects() -> list[str]:
+    defects: list[str] = []
+    for entry in entries():
+        params = entry.spec["function"].get("parameters") or {}
+        for where, name in _declared_id_properties(params, f"{entry.name}.parameters"):
+            if name not in _ID_PROPERTIES:
+                defects.append(f"argument {where}")
+    for table_name, table in (
+        ("_AGENT_TOOL_OUTPUT_SCHEMA", _AGENT_TOOL_OUTPUT_SCHEMA),
+        ("_READ_TOOL_OUTPUT_SCHEMAS", _READ_TOOL_OUTPUT_SCHEMAS),
+        ("_GATEWAY_OUTPUT_SCHEMAS", _GATEWAY_OUTPUT_SCHEMAS),
+    ):
+        allowed = _ID_PROPERTIES | _OUTPUT_ONLY_ID_PROPERTIES
+        for where, name in _declared_id_properties(table, table_name):
+            if name not in allowed:
+                defects.append(f"output {where}")
+    return defects
+
+
+assert not _second_name_defects(), (
+    "a document or reference id under a name outside _ID_PROPERTIES "
+    "(one name in and out — add a role of its own here, never a second "
+    "name for a plain document or reference): " + ", ".join(_second_name_defects())
+)
 
 
 # Advertised tools/list order, curated for a weak model reading top-to-bottom:

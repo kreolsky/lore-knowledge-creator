@@ -337,10 +337,10 @@ SANDBOX_VIEW_IMAGE_TOOL: dict = {
 SANDBOX_FETCH_REFERENCE_TOOL: dict = {
     "type": "function",
     # mutating=True for the SAME property as sandbox_bash (no proxy timeout),
-    # but is NOT exempt from the per-target repeat bound: ref_id is its only
-    # argument, so the generic per-target repeat fallback already keys on it,
-    # and a 3rd identical fetch of one ref_id is the stuck-loop signature (the
-    # destination is deterministic and a re-fetch overwrites itself).
+    # but is NOT exempt from the per-target repeat bound: reference_id is its
+    # only argument, so the generic per-target repeat fallback already keys on
+    # it, and a 3rd identical fetch of one reference_id is the stuck-loop
+    # signature (the destination is deterministic and a re-fetch overwrites itself).
     "mutating": True,
     "function": {
         "name": "sandbox_fetch_reference",
@@ -348,7 +348,8 @@ SANDBOX_FETCH_REFERENCE_TOOL: dict = {
             "Copy the BINARY of an uploaded reference (an image, an audio file, a "
             ".docx, a .zip) INTO your sandbox workspace so code here can read its "
             "bytes. "
-            "Pass the reference's id (ref_id); the file lands at a deterministic "
+            "Pass the reference's id (reference_id — the `reference_id` an import or "
+            "create_document answered); the file lands at a deterministic "
             "path returned in the result — open it from there. The reverse of "
             "sandbox_path on import_file (node_type=\"reference\").\n"
             # The text of an audio/.docx reference is ALREADY in the document
@@ -365,12 +366,12 @@ SANDBOX_FETCH_REFERENCE_TOOL: dict = {
         "parameters": {
             "type": "object",
             "properties": {
-                "ref_id": {
+                "reference_id": {
                     "type": "string",
                     "description": "The reference id to copy into the workspace.",
                 },
             },
-            "required": ["ref_id"],
+            "required": ["reference_id"],
         },
     },
 }
@@ -523,7 +524,7 @@ GENERATE_IMAGE_TOOL: dict = {
             "the working document. Pass the FULL description of the image you want "
             "as `prompt`; the server only rephrases it into stable-diffusion "
             "wording — it sees nothing else. Returns {status:'generating', "
-            "run_id, doc_id} IMMEDIATELY — the image is produced asynchronously "
+            "run_id, document_id} IMMEDIATELY — the image is produced asynchronously "
             "(~10–20s) and lands on the chat's working document on its own; do "
             "NOT wait for it or poll. Requires a working document (open one in "
             "this chat first). Re-calling with the same intent regenerates (the "

@@ -93,7 +93,7 @@ async def test_agent_read_and_search_refuse_locked_page(client, test_db, admin_u
     assert rd.status_code == 200
     sr = await _agent_search(client, agent_tok, marker)
     assert sr.status_code == 200, sr.text
-    assert doc_id in [h["doc_id"] for h in sr.json()["hits"]]
+    assert doc_id in [h["document_id"] for h in sr.json()["hits"]]
 
     locked = await _lock(client, token, doc_id)
     assert locked == [doc_id]
@@ -105,7 +105,7 @@ async def test_agent_read_and_search_refuse_locked_page(client, test_db, admin_u
     assert rd.json()["detail"] == "This page is locked by the user"
     sr = await _agent_search(client, agent_tok, marker)
     assert sr.status_code == 200, sr.text
-    assert doc_id not in [h["doc_id"] for h in sr.json()["hits"]]
+    assert doc_id not in [h["document_id"] for h in sr.json()["hits"]]
 
 
 # TEST-WHY: refused-principal — removing a lock re-verifies the account PIN (same secret, same rate limiter): a wrong PIN is a 403, never a silent unlock; the right PIN empties the set and the agent reads again.

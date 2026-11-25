@@ -76,7 +76,10 @@ async def _echo_connection(reader, writer, log):
     headers, body) in the response body, plus the Authorization value in a
     response header and its base64/url-encoded forms in the body — the shapes
     a reflecting service hands the value back in. `/redirect/*` answers 302 to
-    a foreign host."""
+    a foreign host; `…/location/*` answers 302 to that host with the request's
+    own target after it; `…/error/*` answers 500 quoting its own target raw,
+    as JSON `\\/`, as lower-case `%2f` and as base64, each with and without the
+    leading slash; `/big` is over the download cap."""
     try:
         head = b""
         while b"\r\n\r\n" not in head:
@@ -106,6 +109,29 @@ async def _echo_connection(reader, writer, log):
             payload = b"moved"
             writer.write(
                 b"HTTP/1.1 302 Found\r\nLocation: https://elsewhere.example.com/x\r\n"
+                + f"Content-Length: {len(payload)}\r\n".encode()
+                + b"Connection: close\r\n\r\n" + payload
+            )
+        elif "/location" in target:
+            payload = b"moved"
+            writer.write(
+                b"HTTP/1.1 302 Found\r\nLocation: https://elsewhere.example.com"
+                + target.encode("latin-1") + b"\r\n"
+                + f"Content-Length: {len(payload)}\r\n".encode()
+                + b"Connection: close\r\n\r\n" + payload
+            )
+        elif "/error" in target:
+            spellings = []
+            for variant in (target, target.lstrip("/")):
+                spellings += [
+                    variant,
+                    variant.replace("/", "\\/"),
+                    quote(variant, safe="").replace("%2F", "%2f").replace("%3A", "%3a"),
+                    base64.b64encode(variant.encode()).decode(),
+                ]
+            payload = ("no route for " + "; ".join(spellings)).encode("latin-1")
+            writer.write(
+                b"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n"
                 + f"Content-Length: {len(payload)}\r\n".encode()
                 + b"Connection: close\r\n\r\n" + payload
             )
@@ -205,11 +231,15 @@ async def _make_key(
     return token
 
 
-async def _store_secret(test_db, user_id: str, name: str, hosts: list[str]) -> None:
+async def _store_secret(
+    test_db, user_id: str, name: str, hosts: list[str], *,
+    base_path: str = "", query_param: str = "", value: str = SECRET_VALUE,
+) -> None:
     import user_secrets
 
     row = await user_secrets.create_row(
-        test_db, user_id, name, SECRET_VALUE, "the billing key", hosts,
+        test_db, user_id, name, value, "the billing key", hosts,
+        query_param=query_param, base_path=base_path,
     )
     assert row is not None, "the test's secret row must land (UNIQUE index hit?)"
 
@@ -528,10 +558,12 @@ async def test_create_row_classifies_only_unique_violations(client, test_db, pro
         await vault.create_row(_Locked(), uid, "other", "v", "d", ["api.example.com"])
 
 
-# TEST-WHY: cross-process-contract — the cabinet write gate over real infra (REST → SurrealDB row, nothing patched): a stolen session must not move a key to its own server, and what the gate lets through is what the dial must be able to send.
+# TEST-WHY: cross-process-contract — the cabinet write gate over real infra (REST → SurrealDB row, nothing patched): a stolen session must not move a key to its own server, a PATCH must carry every secret part the row holds, and what the gate lets through is what the dial must be able to send.
 @pytest.mark.asyncio
 async def test_cabinet_refuses_what_would_defeat_the_binding(client, test_db, project_with_doc, admin_user, regular_user):
     import user_secrets as vault
+
+    from db import extract_id
 
     _pid, _idx, uid = project_with_doc
     cookie = {"lore_session": admin_user[1]}
@@ -571,6 +603,80 @@ async def test_cabinet_refuses_what_would_defeat_the_binding(client, test_db, pr
     )
     assert resp.status_code == 422, resp.text
     assert "sk-echoed" not in resp.text
+
+    # A row holds two secret parts, the key and an optional base path: a PATCH
+    # that brings one, or other hosts, carries every part the row holds —
+    # else 422 and the ciphertext does not move.
+    pathed = f"pathed-{_secrets.token_hex(3)}"
+    resp = await client.post(
+        "/api/cabinet/secrets", json={"name": pathed, "value": SECRET_VALUE, "hosts": ["api.example.com"]},
+        cookies=cookie,
+    )
+    assert resp.status_code == 200, resp.text
+    pathed_url = f"/api/cabinet/secrets/{pathed}"
+
+    async def stored_ciphertext() -> str:
+        return (await vault.get_row(test_db, uid, pathed))["ciphertext"]
+
+    before = await stored_ciphertext()
+    resp = await client.patch(pathed_url, json={"base_path": BASE_PATH}, cookies=cookie)
+    assert resp.status_code == 422 and "enter the key again" in resp.text, resp.text
+    assert await stored_ciphertext() == before
+    resp = await client.patch(
+        pathed_url, json={"base_path": BASE_PATH, "value": SECRET_VALUE}, cookies=cookie,
+    )
+    assert resp.status_code == 200 and resp.json()["has_base_path"] is True, resp.text
+
+    before = await stored_ciphertext()
+    for body, missing in (
+        ({"value": "sk-other"}, "enter the base path again"),
+        ({"base_path": "/0f8b6d4c2a1e3f5d"}, "enter the key again"),
+        ({"hosts": ["other.example.com"]}, "enter the key and the base path again"),
+        # A blank part is a missing part: whitespace must not erase what is stored.
+        ({"value": SECRET_VALUE, "base_path": "   "}, "enter the base path again"),
+        ({"value": "   ", "base_path": BASE_PATH}, "enter the key again"),
+        ({"value": "  ", "base_path": " "}, "enter the key and the base path again"),
+    ):
+        resp = await client.patch(pathed_url, json=body, cookies=cookie)
+        assert resp.status_code == 422 and missing in resp.text, resp.text
+        assert await stored_ciphertext() == before
+    assert (await vault.get_row(test_db, uid, pathed))["hosts"] == ["api.example.com"]
+
+    # Description, header fields and the switch need no secret.
+    resp = await client.patch(
+        pathed_url, json={"description": "renamed", "enabled": False, "header_name": "X-Key"},
+        cookies=cookie,
+    )
+    assert resp.status_code == 200, resp.text
+    assert await stored_ciphertext() == before
+
+    # An MCP server key row takes no path: its renderer would dial the packed text.
+    sid = _secrets.token_hex(4)
+    await vault.put_server_key(
+        test_db, uid, server_id=sid, host="mcp.example.com", port=None, value="sk-mcp",
+    )
+    mcp_before = (await vault.get_row(test_db, uid, f"mcp--{sid}"))["ciphertext"]
+    resp = await client.patch(
+        f"/api/cabinet/secrets/mcp--{sid}", json={"base_path": BASE_PATH}, cookies=cookie,
+    )
+    assert resp.status_code == 422 and "MCP server key" in resp.text, resp.text
+    assert (await vault.get_row(test_db, uid, f"mcp--{sid}"))["ciphertext"] == mcp_before
+
+    # An undecryptable row: its parts are unknown, so at least one is required.
+    lost = f"lost-{_secrets.token_hex(3)}"
+    lost_row = await vault.create_row(test_db, uid, lost, SECRET_VALUE, "", ["api.example.com"])
+    await vault.update_row(test_db, extract_id(lost_row["id"]), {"ciphertext": "not-a-token"})
+    lost_url = f"/api/cabinet/secrets/{lost}"
+    resp = await client.patch(lost_url, json={"hosts": ["other.example.com"]}, cookies=cookie)
+    assert resp.status_code == 422 and "enter a key or a base path" in resp.text, resp.text
+    resp = await client.patch(lost_url, json={"base_path": BASE_PATH}, cookies=cookie)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_set"] is True and resp.json()["has_base_path"] is True
+    lost_cipher = (await vault.get_row(test_db, uid, lost))["ciphertext"]
+    assert vault.open_parts(lost_cipher) == ("", BASE_PATH)
+    # It holds a path now: a value alone is refused.
+    resp = await client.patch(lost_url, json={"value": "sk-again"}, cookies=cookie)
+    assert resp.status_code == 422 and "enter the base path again" in resp.text, resp.text
 
     # Deleting a user destroys their keys; the deleter's own stay.
     target = regular_user[0]
@@ -651,18 +757,276 @@ def test_host_masks_refuse_apex_foreign_and_tld():
     assert us.render_header_template("Basic {{value_b64}}", "u:p") == "Basic dTpw"
 
 
-# TEST-WHY: pure-logic-edge — the filter is the only thing keeping a query-mode key out of /logs/lore.log; a record built the way httpx builds it must lose its query.
-def test_httpx_log_filter_drops_query():
+# TEST-WHY: pure-logic-edge — the filter is the only thing keeping a query-mode key and a secret address out of /logs/lore.log; lines logged the way httpx and httpx2 log them must lose exactly that and nothing else.
+@pytest.mark.asyncio
+async def test_request_log_lines_drop_query_and_hide_path(caplog):
     import logging
 
+    import http_clients
     import httpx
+    import httpx2
     from logging_conf import _StripQueryFilter
 
-    record = logging.LogRecord(
-        "httpx", logging.INFO, __file__, 1, 'HTTP Request: %s %s "%s %d %s"',
-        ("GET", httpx.URL(f"https://h.example.com/p?key={SECRET_VALUE}"), "HTTP/1.1", 200, "OK"),
-        None,
+    httpx_log, httpx2_log = logging.getLogger("httpx"), logging.getLogger("httpx2")
+    own, sdk = _StripQueryFilter(), _StripQueryFilter(hide_path=True)
+
+    def line(log, url) -> str:
+        caplog.clear()
+        log.info('HTTP Request: %s %s "%s %d %s"', "GET", url, "HTTP/1.1", 200, "OK")
+        [record] = caplog.records
+        return record.getMessage()
+
+    plain = httpx.URL(f"https://h.example.com:8443/p/q?key={SECRET_VALUE}")
+    secret = f"https://[2001:db8::1]:8443/{SECRET_VALUE}/mcp?key={SECRET_VALUE}#{SECRET_VALUE}"
+    path_kept = 'HTTP Request: GET https://h.example.com:8443/p/q "HTTP/1.1 200 OK"'
+    host_only = 'HTTP Request: GET https://[2001:db8::1]:8443/[path hidden] "HTTP/1.1 200 OK"'
+
+    httpx_log.addFilter(own)
+    httpx2_log.addFilter(sdk)
+    try:
+        with caplog.at_level(logging.INFO, "httpx"), caplog.at_level(logging.INFO, "httpx2"):
+            assert line(httpx_log, plain) == path_kept
+
+            async with http_clients.isolated_client(timeout=1):
+                assert line(httpx_log, httpx.URL(secret)) == host_only
+            assert line(httpx_log, plain) == path_kept
+
+            assert line(httpx2_log, httpx2.URL(secret)) == host_only
+    finally:
+        httpx_log.removeFilter(own)
+        httpx2_log.removeFilter(sdk)
+
+
+# ─── Hidden base path (seal_parts / open_parts) ──────────────────────────────
+
+BASE_HEX = "k9f2c7e1d4a6b8f0"
+BASE_PATH = f"/{BASE_HEX}/"
+# The save gate's two fixed refusals — a closed set, so neither quotes the path.
+BASE_PATH_REFUSALS = frozenset({
+    "the base path must start with / and hold only letters, digits and "
+    "._~:@=,+- in its segments, without . or .. segments, at least 16 characters long",
+    "the base path is over 1024 characters",
+})
+# (stored base, the model's own path, what the host must receive)
+JOIN_TABLE = [
+    (BASE_PATH, "", BASE_PATH),
+    (BASE_PATH.rstrip("/"), "", BASE_PATH.rstrip("/")),
+    (BASE_PATH, "///", BASE_PATH),
+    (BASE_PATH, "/export/daily", f"{BASE_PATH}export/daily"),
+    (BASE_PATH.rstrip("/"), "/export/daily", f"{BASE_PATH}export/daily"),
+    (BASE_PATH, "//export/daily", f"{BASE_PATH}export/daily"),
+    (BASE_PATH, "/group%2Frepo", f"{BASE_PATH}group%2Frepo"),
+    (BASE_PATH, "/q?x=a%2Bb&y=1", f"{BASE_PATH}q?x=a%2Bb&y=1"),
+]
+ESCAPE_TABLE = [
+    "/export/../x", "/%2e%2e/x", "/%252e%252e/x", "/..%2Fx", "/a/.%2e/x",
+    "/..;/x", "/a\\..\\x", "/..%3Fx", "/x%23/..",
+]
+
+
+# TEST-WHY: pure-logic-edge — the save gate and the packing: the form kept exactly as written, every shape that could climb, carry a second spelling or be too short to be secret refused by one of two fixed texts, an old row reading as no path, value+path and path alone round-tripping; zero seams.
+def test_base_path_save_gate_and_packing():
+    import user_secrets as us
+
+    for raw, kept in [
+        ("", ""),
+        ("   ", ""),
+        (BASE_PATH, BASE_PATH),
+        (f"  {BASE_PATH}  ", BASE_PATH),
+        (BASE_PATH.rstrip("/"), BASE_PATH.rstrip("/")),
+        ("/k9f2-c7e1.d4a6_b8f0~x:y@z=w,u+v/", "/k9f2-c7e1.d4a6_b8f0~x:y@z=w,u+v/"),
+        ("/a/b/c/d/e/f/g/h/i/j/", "/a/b/c/d/e/f/g/h/i/j/"),
+        ("/" + "a" * 1023, "/" + "a" * 1023),
+    ]:
+        assert us.normalize_base_path(raw) == kept, raw
+    for bad in [
+        BASE_HEX,                        # no leading slash
+        "/",                              # the root is no prefix
+        "/short/",                        # under 16 characters: guessable
+        f"/a/../{BASE_HEX}/",             # climbs
+        f"/./{BASE_HEX}/",
+        "/has%2Fpercent12345/",           # % has a second spelling
+        "/has space in it12345/",
+        f"/{BASE_HEX}?x=1",               # a query is not a path
+        f"/{BASE_HEX};x/",                # a path parameter cut
+        f"/{BASE_HEX}\\x/",
+        "/" + "a" * 1024,
+    ]:
+        with pytest.raises(us.SecretValidationError) as refused:
+            us.normalize_base_path(bad)
+        assert str(refused.value) in BASE_PATH_REFUSALS, "the refusal quoted the path"
+
+    # The packing: an old row (value alone) reads as no path, value+path and
+    # path alone round-trip, an undecryptable one is None, and a row with
+    # neither part is refused at its only writer.
+    assert us.open_parts(us.encrypt_value("sk-old-row")) == ("sk-old-row", "")
+    sealed = us.encrypt_value(us.seal_parts("sk-v", BASE_PATH))
+    assert us.open_parts(sealed) == ("sk-v", BASE_PATH)
+    path_only = us.encrypt_value(us.seal_parts("", BASE_PATH))
+    assert us.open_parts(path_only) == ("", BASE_PATH)
+    assert us.open_parts("not-a-token") is None
+    with pytest.raises(us.SecretValidationError):
+        us.seal_parts("", "")
+
+
+# TEST-WHY: cross-process-contract — the dial over real infra (row → handler → TLS echo, nothing patched): the host receives the stored base exactly as saved in front of the model's path, byte for byte, the query untouched; a path that could climb out of it (`..` in every spelling httpx folds or leaves, or a service may unfold) ends in 422 before any dial; a key with a path and no value reaches the host with the path and without any credential.
+@pytest.mark.asyncio
+async def test_hidden_base_path_is_dialled_under_the_base(client, test_db, project_with_doc, echo):
+    pid, _idx, uid = project_with_doc
+    token = await _make_key(uid, pid, internal=True)
+    root = f"https://127.0.0.1:{echo.port}"
+    bound = [f"127.0.0.1:{echo.port}"]
+
+    async def call(name: str, model_path: str, **extra):
+        return await client.post(
+            "/api/tool/http_request",
+            json={"secret": name, "url": f"{root}{model_path}", **extra},
+            headers=_hdr(token),
+        )
+
+    for base, model_path, dialled in JOIN_TABLE:
+        name = f"join-{_secrets.token_hex(3)}"
+        await _store_secret(test_db, uid, name, bound, base_path=base)
+        resp = await call(name, model_path)
+        assert resp.status_code == 200, resp.text
+        assert echo.log[-1]["target"] == dialled, (base, model_path)
+        assert BASE_HEX not in resp.text
+
+    name = f"esc-{_secrets.token_hex(3)}"
+    await _store_secret(test_db, uid, name, bound, base_path=BASE_PATH)
+    dials = len(echo.log)
+    for model_path in ESCAPE_TABLE:
+        resp = await call(name, model_path)
+        assert resp.status_code == 422, (model_path, resp.text)
+        assert "`.` or `..`" in resp.text and model_path not in resp.text
+    assert len(echo.log) == dials, "an escaping path was dialed anyway"
+
+    # A key with a path and no value: the path goes, no credential does — in
+    # header mode and in query mode — and the agent's own Authorization still
+    # never leaves.
+    for extra in ({}, {"query_param": "key"}):
+        name = f"hook-{_secrets.token_hex(3)}"
+        await _store_secret(test_db, uid, name, bound, base_path=BASE_PATH, value="", **extra)
+        resp = await call(
+            name, "/hook?x=1", headers={
+                "Authorization": "Bearer agent-forged",
+                "X-Original-URL": "/admin", "X-Rewrite-URL": "/admin",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        seen = echo.log[-1]
+        assert seen["target"] == f"{BASE_PATH}hook?x=1"
+        assert not {"authorization", "x-original-url", "x-rewrite-url"} & set(seen["headers"])
+        assert BASE_HEX not in resp.text
+
+
+# TEST-WHY: refused-principal — the base path is a secret like the value: reflected in a Location header, in an error body (raw, JSON `\/`, lower-case `%2f`, base64 — with and without the leading slash) and in a saved file, none of it may ride a result; the binding stays shut for a foreign host; the cabinet GET and list_secrets show it only as a flag.
+@pytest.mark.asyncio
+async def test_hidden_base_path_shows_only_as_flags(
+    client, test_db, project_with_doc, echo, admin_user, sftp_write,
+):
+    import http_clients
+
+    pid, _idx, uid = project_with_doc
+    token = await _make_key(uid, pid, internal=True)
+    cookie = {"lore_session": admin_user[1]}
+    root = f"https://127.0.0.1:{echo.port}"
+    json_spelling = BASE_PATH.replace("/", "\\/")
+    pct_spelling = quote(BASE_PATH, safe="").replace("%2F", "%2f")
+    spellings = (
+        BASE_PATH, BASE_PATH.lstrip("/"),
+        json_spelling, json_spelling.lstrip("/"),
+        pct_spelling, pct_spelling.lstrip("/"),
+        base64.b64encode(BASE_PATH.encode()).decode(),
     )
-    assert _StripQueryFilter().filter(record)
-    assert SECRET_VALUE not in record.getMessage()
-    assert "https://h.example.com/p" in record.getMessage()
+
+    # Created through the cabinet: it counts as set, and the path is a flag.
+    name = f"scrub-{_secrets.token_hex(3)}"
+    resp = await client.post(
+        "/api/cabinet/secrets",
+        json={"name": name, "value": SECRET_VALUE, "base_path": BASE_PATH,
+              "hosts": [f"127.0.0.1:{echo.port}"]},
+        cookies=cookie,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_set"] is True and resp.json()["has_base_path"] is True
+    assert set(resp.json()) == {
+        "name", "description", "hosts", "header_name", "header_template",
+        "query_param", "enabled", "is_set", "has_base_path", "updated_at",
+    }
+
+    async def call(model_path: str, **extra):
+        return await client.post(
+            "/api/tool/http_request",
+            json={"secret": name, "url": f"{root}{model_path}", **extra},
+            headers=_hdr(token),
+        )
+
+    # Control: the echo really reflects the address in every spelling.
+    async with http_clients.isolated_client(timeout=5) as probe:
+        control = (await probe.get(f"{root}{BASE_PATH}error/x")).text
+    for spelling in spellings:
+        assert spelling in control, f"the echo does not reflect {spelling!r}"
+
+    # The binding stays shut for a foreign host.
+    resp = await client.post(
+        "/api/tool/http_request",
+        json={"secret": name, "url": "https://elsewhere.example.com/api"},
+        headers=_hdr(token),
+    )
+    assert resp.status_code == 403, resp.text
+
+    # A 302 whose Location carries the address — the longest spelling goes
+    # first, so the model's own part stays visible after `[secret]`.
+    resp = await call("/location/x")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status_code"] == 302
+    assert resp.json()["headers"]["location"] == "https://elsewhere.example.com[secret]/location/x"
+
+    # A 500 quoting its own address: inline, and as the saved file.
+    for save in (True, False):
+        resp = await call("/error/x", save=save)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status_code"] == 500
+        assert all(s not in resp.text for s in spellings), "the base path rode a result"
+        if save:
+            saved = sftp_write[resp.json()["saved_path"]]
+            assert all(s.encode() not in saved for s in spellings)
+            assert b"[secret]" in saved
+        else:
+            assert "[secret]" in resp.json()["body"]
+
+    # A bot-style path (`:` percent-encodes too) whose key value is a piece of
+    # it: the longer secret goes first, in every spelling.
+    bot_tail = "AAHk3v9XcQ2mT7"
+    bot_path = f"/bot90817263:{bot_tail}/"
+    bot = f"bot-{_secrets.token_hex(3)}"
+    await _store_secret(
+        test_db, uid, bot, [f"127.0.0.1:{echo.port}"], base_path=bot_path, value="90817263",
+    )
+    resp = await client.post(
+        "/api/tool/http_request",
+        json={"secret": bot, "url": f"{root}/error/x"}, headers=_hdr(token),
+    )
+    assert resp.status_code == 200 and resp.json()["status_code"] == 500, resp.text
+    assert bot_tail not in resp.text, "a piece of the base path rode a result"
+
+    # The cabinet GET and the tool's catalog: the flag only, always present.
+    resp = await client.get("/api/cabinet/secrets", cookies=cookie)
+    assert resp.status_code == 200 and BASE_HEX not in resp.text
+    mine = next(s for s in resp.json()["secrets"] if s["name"] == name)
+    assert mine["is_set"] is True and mine["has_base_path"] is True
+    resp = await client.post("/api/tool/list_secrets", json={}, headers=_hdr(token))
+    assert resp.status_code == 200 and BASE_HEX not in resp.text
+    flags = {s["name"]: s["hidden_base_path"] for s in resp.json()["secrets"]}
+    assert flags[name] is True
+    assert all(isinstance(v, bool) for v in flags.values())
+
+    # Neither value nor path, or a malformed path: refused, nothing quoted.
+    for body in (
+        {"name": "neither", "value": "", "hosts": ["api.example.com"]},
+        {"name": "malformed", "hosts": ["api.example.com"], "base_path": "/has%2Fsecret12345/"},
+    ):
+        resp = await client.post("/api/cabinet/secrets", json=body, cookies=cookie)
+        assert resp.status_code == 422, resp.text
+        assert "has%2Fsecret12345" not in resp.text

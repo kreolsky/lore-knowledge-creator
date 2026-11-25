@@ -1,0 +1,16 @@
+{
+  // The plugin's type check: the image build runs `tsc -p lore-driver` from the
+  // dsh workspace the plugin is copied into, so `..` is that workspace's root.
+  "extends": "../tsconfig.host.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true
+  },
+  "include": ["src"],
+  // WHY the dsh ROOT project: with it dsh resolves to its built declarations
+  // and every reported error is in lore-driver/src; without it dsh's own source
+  // errors are reported too. A reference straight to tsconfig.host.json is
+  // refused by tsc (TS6310).
+  "references": [{ "path": ".." }]
+}

@@ -106,7 +106,8 @@ async def test_scoped_key_enumeration_stays_inside_the_wall(
     out = await _outline_row_ids(
         client, scoped, {"start_id": outside, "include_outline": True},
     )
-    ids = {d["document_id"] for d in out["documents"]}
-    assert outside not in ids, "the wall cannot be widened by request"
-    assert ids == {inside}
+    assert out["documents"] == [], "the wall cannot be widened by request"
+
+    out = await _outline_row_ids(client, scoped, {"include_outline": True})
+    assert {d["document_id"] for d in out["documents"]} == {inside}
     assert _row(out, inside)["outline"]

@@ -186,7 +186,7 @@ class TestSaveSkillUpsert:
             "apply": "auto",
         }, headers=_approved(agent_tok))
         assert second.status_code == 200, second.text
-        assert second.json()["doc_id"] == first.json()["doc_id"]
+        assert second.json()["document_id"] == first.json()["document_id"]
         assert second.json()["spec_doc_id"] == first.json()["spec_doc_id"]
 
         folder_id = await _skills_folder_id(test_db, pid)
@@ -198,7 +198,7 @@ class TestSaveSkillUpsert:
         spec_rows = await test_db.query(
             "SELECT content FROM documents WHERE project_id = $pid "
             "AND parent_id = $hid AND deleted_at IS NONE",
-            {"pid": pid, "hid": first.json()["doc_id"]},
+            {"pid": pid, "hid": first.json()["document_id"]},
         )
         assert spec_rows[0]["content"] == "v2 spec"
 
@@ -305,7 +305,7 @@ class TestSaveSkillFiles:
         ])
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        children = await _head_children(test_db, pid, body["doc_id"])
+        children = await _head_children(test_db, pid, body["document_id"])
         by_title = {c["title"]: c for c in children}
         assert set(by_title) == {"scripts/run.py", "references/api.md"}
         assert by_title["scripts/run.py"]["content"] == SCRIPT

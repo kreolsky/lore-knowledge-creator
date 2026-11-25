@@ -115,7 +115,7 @@ async def test_retired_fact_absent_from_search_materials(project_with_doc):
     res = await _search_materials_exec(
         project_id=pid, user={"user_id": uid}, query=TOKEN, k=5,
     )
-    hit_ids = {h.get("doc_id") or h.get("parent_id") for h in res["hits"]}
+    hit_ids = {h["document_id"] for h in res["hits"]}
     assert live_id in hit_ids, f"sanity: the live fact matches the query — {res}"
     assert retired_id not in hit_ids, (
         f"retired fact leaked into search_materials hits — {res['hits']}"

@@ -85,10 +85,10 @@ async def _seed(client, test_db, admin_user, project_with_doc):
     agent_key = await _make_agent_key(test_db, admin_uid, pid)
     html_id = (await _create_html(
         client, agent_key, pid, parent, "Dashboard", PAGE,
-    )).json()["doc_id"]
+    )).json()["document_id"]
     other_id = (await _create_html(
         client, agent_key, pid, parent, "Other page", "<p>other</p>",
-    )).json()["doc_id"]
+    )).json()["document_id"]
     plain_id = await _make_doc(client, token, pid, "Plain doc", "plain markdown")
     return agent_key, parent, html_id, other_id, plain_id
 
@@ -325,7 +325,7 @@ async def test_html_agent_surface_and_rules(client, test_db, admin_user, project
     )
     resp = await _create_html(client, agent_key, pid, parent, "Page", page)
     assert resp.status_code == 200, resp.text
-    doc_id = resp.json()["doc_id"]
+    doc_id = resp.json()["document_id"]
     row = await _row(test_db, doc_id)
     assert row["media_type"] == "html"
     assert row["is_reference"] is False

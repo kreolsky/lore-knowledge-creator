@@ -30,30 +30,6 @@ def _hdr(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.fixture
-def sftp_write(monkeypatch):
-    """Sandbox configured + the SFTP write seam recorded as {rel_path: bytes}
-    (rel to the caller's workspace)."""
-    from helpers import pin_tool_gates
-    from routes.tool_api import sandbox
-    from routes.tool_api.sandbox import (  # noqa: F401 — submodules own the seams
-        bash,
-        files,
-        lifecycle,
-        runs,
-        transport,
-    )
-
-    pin_tool_gates(monkeypatch, sandbox=True)
-    writes: dict[str, bytes] = {}
-
-    async def _fake_write(ws_path: str, data: bytes):
-        writes[ws_path] = data
-
-    monkeypatch.setattr(sandbox.files, "_sftp_write", _fake_write)
-    return writes
-
-
 async def _seed_skill(test_db, pid, uid, name, children: dict[str, str]) -> str:
     """A project skill head under the Skills folder + the given children
     (title → content), created through the same direct path save_skill uses."""
@@ -69,10 +45,10 @@ async def _seed_skill(test_db, pid, uid, name, children: dict[str, str]) -> str:
     )
     for title, content in children.items():
         await _apply_create_document_direct(
-            title=title, content=content, parent_id=head["doc_id"],
+            title=title, content=content, parent_id=head["document_id"],
             project_id=pid, user=user, scope_root="",
         )
-    return head["doc_id"]
+    return head["document_id"]
 
 
 @pytest.mark.asyncio

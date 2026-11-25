@@ -773,7 +773,7 @@ class ToolExportSubtreeMd(BaseModel):
     zip is ephemeral storage swept by TTL), so a read-only key may call it.
     """
 
-    root_id: str
+    document_id: str
 
 
 class ToolImportSubtreeMd(BaseModel):
@@ -804,14 +804,15 @@ class ToolSandboxFetchReference(BaseModel):
     """sandbox_fetch_reference body — copy an uploaded reference INTO the workspace.
 
     # ARCH: the inbound half of the SFTP file bridge.
-    # One argument, `ref_id` — the agent has nothing else to choose (the backend
-    # already knows ref_id and the stored safe_name), so there is NO
-    # destination-path parameter. No path argument means no hole to guard on this
-    # side (the INVARIANT(security) in workspace_for is untouched by the inbound
-    # direction). Console-only (internal whole-project key), never served over MCP.
+    # One argument, `reference_id` — the agent has nothing else to choose (the
+    # backend already knows the reference id and the stored safe_name), so there
+    # is NO destination-path parameter. No path argument means no hole to guard
+    # on this side (the INVARIANT(security) in workspace_for is untouched by the
+    # inbound direction). Console-only (internal whole-project key), never served
+    # over MCP.
     """
 
-    ref_id: str
+    reference_id: str
 
 
 class ToolSandboxFetchSkill(BaseModel):

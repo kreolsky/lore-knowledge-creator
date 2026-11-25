@@ -411,7 +411,7 @@ async def require_digest_editor(project_id: str, user: dict, created_by: str | N
 
 
 async def require_digest_deleter(project_id: str, user: dict, created_by: str | None) -> None:
-    """403 unless `user` may delete a digest binding: its creator, a project root, an
+    """403 unless `user` may delete a digest binding or stop its schedule: its creator, a project root, an
     instance admin, or the moderator of the creator's group. Project access is the
     caller's separate check."""
     if is_instance_admin(user) or await _is_digest_editor(project_id, user, created_by):
@@ -422,7 +422,7 @@ async def require_digest_deleter(project_id: str, user: dict, created_by: str | 
     if not (creator and is_moderator_of(user, creator)):
         raise HTTPException(
             status_code=403,
-            detail="Only the digest's author, a project root, an admin or the author's moderator may delete it",
+            detail="Only the digest's author, a project root, an admin or the author's moderator may stop or delete it",
         )
 
 

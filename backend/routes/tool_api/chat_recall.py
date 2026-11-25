@@ -263,7 +263,8 @@ def _toc_fields(toc: dict | None, turns: list[list[dict]]) -> dict:
             # drops the whole toc at the next pass of a chat that is being labelled.
             if placed:
                 topics.append({"title": t["title"], "synopsis": t["synopsis"],
-                               "turn": placed[0][0], "message_id": placed[0][1]})
+                               "turn": placed[0][0], "message_id": placed[0][1],
+                               **{k: t[k] for k in ("kind", "outcome", "marks") if t.get(k)}})
         fields["topics"] = sorted(topics, key=lambda t: t["turn"])
     labelled = set((toc or {}).get("labelled_ids") or [])
     first = next((i for mid, i in opening.items() if mid not in labelled), None)

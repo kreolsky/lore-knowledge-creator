@@ -229,17 +229,17 @@ async def _apply_append_direct(
     # BOTH the empty-doc (content-set) and non-empty (synthesized-edit) branches.
     # This is the empty-doc branch's guard; the non-empty branch is covered by
     # route_document_edits' scan over the synthesized edit's new_text.
-    from agent.doc_state import reject_remote_images
+    from agent.doc_state import reject_remote_images, resolve_live_doc_state
 
     reject_remote_images(append_text)
-
-    from agent.doc_state import resolve_live_doc_state
 
     content, _ = await resolve_live_doc_state(doc_id)
     try:
         edit = await _build_append_edit(content, append_text, section)
     except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        refusal = HTTPException(status_code=404, detail=str(exc))
+        refusal.next_action = "pass a heading the document has, or omit section to append at its end"
+        raise refusal
 
     if edit is None:
         return await _apply_append_to_empty_doc(
@@ -283,7 +283,7 @@ async def _apply_append_to_empty_doc(
         finalize_body=body,
     )
     await broadcast_agent_presence(doc_id, user.get("user_id"))
-    result = {"status": "applied", "doc_id": doc_id}
+    result = {"status": "applied", "document_id": doc_id}
     if tables_out:
         result["tables"] = tables_out
     return result

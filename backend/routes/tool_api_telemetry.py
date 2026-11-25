@@ -103,7 +103,7 @@ def result_shape_of(result: Any) -> dict:
     }
 
 
-# The ranked doc_ids of a search kept on its raw row — enough for exposure →
+# The ranked document ids of a search kept on its raw row — enough for exposure →
 # selection analysis without blowing the detail cap.
 MAX_HIT_IDS = 20
 
@@ -126,7 +126,7 @@ def hit_ids_of(result: Any) -> dict:
         return {}
     ids: list[str] = []
     for h in result["hits"]:
-        did = h.get("doc_id") if isinstance(h, dict) else None
+        did = h.get("document_id") if isinstance(h, dict) else None
         if did and h.get("kind") != "memory" and did not in ids:
             ids.append(did)
     return {"hit_ids": ids[:MAX_HIT_IDS]}

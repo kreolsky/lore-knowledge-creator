@@ -50,18 +50,18 @@ def _rrf_merge(direct: list[dict], semantic: list[dict], k_const: int = 60) -> l
     scores: dict[str, float] = {}
     meta: dict[str, dict] = {}
     for rank, h in enumerate(direct, start=1):
-        did = h["doc_id"]
+        did = h["document_id"]
         scores[did] = scores.get(did, 0.0) + 1.0 / (k_const + rank)
         if did not in meta:
             meta[did] = dict(h)
     for rank, h in enumerate(semantic, start=1):
-        did = h["doc_id"]
+        did = h["document_id"]
         scores[did] = scores.get(did, 0.0) + 1.0 / (k_const + rank)
         if did not in meta:
             meta[did] = dict(h)
         else:
             meta[did]["source"] = "both"
-    # Order by RRF score desc; doc_id is a deterministic tiebreak.
+    # Order by RRF score desc; document_id is a deterministic tiebreak.
     ordered = sorted(meta, key=lambda d: (-scores[d], d))
     # INVARIANT: this order is the ONLY ranking signal a hit carries — the builders emit
     # no `score`, and nothing may add one here.
@@ -85,7 +85,7 @@ def _build_direct_hit(r: dict, *, snippet: str) -> dict:
     parent_raw = r.get("parent_id")
     return {
         "kind": kind,
-        "doc_id": r["id"],
+        "document_id": r["id"],
         "parent_id": extract_id(parent_raw) if parent_raw else None,
         "title": r.get("title") or "",
         "heading": None,
@@ -340,7 +340,7 @@ def _build_semantic_hit(h) -> dict:
     """One semantic-layer hit, shaped for the fusion input."""
     return {
         "kind": h.kind,
-        "doc_id": h.parent_id,
+        "document_id": h.parent_id,
         "parent_id": h.parent_id,
         "title": h.parent_title,
         "heading": h.heading,
@@ -591,7 +591,7 @@ async def _attach_outlines(db, project_id: str, hits: list[dict]) -> None:
     # compressed form). One select over the already access-filtered ids — the
     # stored columns, never a content pull (ARCH on doc_outline).
     """
-    ids = sorted({h["doc_id"] for h in hits if h.get("kind") != "memory"})
+    ids = sorted({h["document_id"] for h in hits if h.get("kind") != "memory"})
     if not ids:
         return
     rows = await db.query(
@@ -602,10 +602,10 @@ async def _attach_outlines(db, project_id: str, hits: list[dict]) -> None:
     outlines = {r["id"]: r for r in rows or [] if isinstance(r, dict) and r.get("outline")}
     seen: set[str] = set()
     for h in hits:
-        row = outlines.get(h["doc_id"])
-        if row is None or h["doc_id"] in seen or h.get("kind") == "memory":
+        row = outlines.get(h["document_id"])
+        if row is None or h["document_id"] in seen or h.get("kind") == "memory":
             continue
-        seen.add(h["doc_id"])
+        seen.add(h["document_id"])
         h["outline"] = row["outline"]
         if row.get("outline_hidden"):
             h["outline_hidden"] = row["outline_hidden"]
@@ -637,8 +637,8 @@ async def _filter_accessible(db, project_id: str, hits: list[dict], user: dict) 
 
     # Page PIN lock (see SYSTEM: page-lock) — the user's PIN-locked pages are
     # invisible to agent search: the locked set is fetched ONCE per call (never
-    # per hit) and every hit whose doc_id is in it drops before the RBAC pass.
-    # Memory hits never match (their doc_id is a .lore/system/memory doc, not a
+    # per hit) and every hit whose document_id is in it drops before the RBAC pass.
+    # Memory hits never match (their document_id is a .lore/system/memory doc, not a
     # user page).
     """
     from page_lock import locked_doc_ids
@@ -648,7 +648,7 @@ async def _filter_accessible(db, project_id: str, hits: list[dict], user: dict) 
     locked = await locked_doc_ids(user["user_id"])
     if not await get_project_access(project_id, user):
         return []
-    ids = sorted({h["doc_id"] for h in hits if h["doc_id"] not in locked})
+    ids = sorted({h["document_id"] for h in hits if h["document_id"] not in locked})
     if not ids:
         return []
     rows = await db.query(
@@ -657,7 +657,7 @@ async def _filter_accessible(db, project_id: str, hits: list[dict], user: dict) 
         {"ids": ids, "pid": project_id},
     )
     readable = {r["id"] for r in rows or [] if isinstance(r, dict) and r.get("id")}
-    return [h for h in hits if h["doc_id"] not in locked and h["doc_id"] in readable]
+    return [h for h in hits if h["document_id"] not in locked and h["document_id"] in readable]
 
 
 async def search_materials_tool(

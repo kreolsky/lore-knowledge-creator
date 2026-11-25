@@ -28,9 +28,9 @@ keeps its path.
 
 # ARCH (security): a scoped key's topology is CLIPPED to its scope_root BEFORE
 # any counting. Why: counters computed over the whole project would leak the
-# size and depth of the tree outside the wall — the scope_root override guards
-# ids; this guards aggregates. An INDEX scope_root (the project's face, plan
-# "project-index-as-project-face") clips to the index scope (the whole project
+# size and depth of the tree outside the wall. The clip guards
+# ids AND aggregates: a start_id outside it matches no row. An INDEX scope_root
+# (the project's face) clips to the index scope (the whole project
 # minus system/help, scope.resolve_index_scope) instead of the index row's own
 # children, and the seed is NOT forced onto the index row — the caller's
 # default root map IS the index scope's orientation view.
@@ -330,26 +330,26 @@ async def _get_project_structure_exec(
     routes.tool_api.tool_get_project_structure delegates here so both dispatch paths
     (HTTP endpoint for dsh + this in-editor loop executor) return the same shape.
 
-    # ARCH: when `scope_root` is set it
-    # OVERRIDES the caller's start_id — the agent cannot widen its view past the
-    # wall, so the returned tree is the subtree only (root + descendants), and
-    # the topology itself is clipped to the wall before any counting.
+    # ARCH: `scope_root` is the DEFAULT seed of a scoped key; the caller's
+    # start_id narrows inside it. The agent cannot widen its view past the wall:
+    # the topology itself is clipped to the wall before any counting, so a
+    # start_id outside it gets the same empty answer as an unknown id.
     """
     db = await get_db()
-    # T5: a scoped key always enumerates from its subtree root, regardless of the
-    # caller's start_id (the wall cannot be widened by request) — EXCEPT an
+    # A scoped key with no start_id (an empty string is none) enumerates from its
+    # subtree root; a given start_id stands, the clip below bounds it — EXCEPT an
     # index scope_root: the index is the project's face, so the enumeration
     # keeps the caller's seed (default: the root orientation map) and the clip
     # below applies the index scope (whole project minus system/help).
     index_ids = await resolve_index_scope(scope_root, project_id) if scope_root else None
     if scope_root and index_ids is None:
-        start_id = scope_root
+        start_id = start_id or scope_root
     # ARCH (enumeration-only): outlines ride the ENUMERATION mode, never the
     # root map — a root call can emit up to STRUCTURE_ROW_CAP rows and outlines
     # on all of them would destroy the layering the map exists for. The refusal
     # names the correction (server-decides rule 2). Checked AFTER the
-    # scope_root override: the wall owns the seed, so a scoped key is already
-    # on the enumeration path.
+    # scope_root default: a subtree-scoped key always has a seed, so it is
+    # already on the enumeration path.
     if include_outline and not start_id:
         from fastapi import HTTPException
 
@@ -377,8 +377,8 @@ async def _get_project_structure_exec(
         # ARCH (security): clip BEFORE counting — counters computed over the
         # whole project would leak the size and depth of the tree outside the
         # wall. UNCONDITIONAL: a wall doc that is itself deleted/unknown clips
-        # the map to nothing (empty result) — the wall owns the seed, so an
-        # unknown wall id is an empty answer, never a widening one. The index
+        # the map to nothing (empty result) — an unknown wall
+        # id is an empty answer, never a widening one. The index
         # scope_root's clip is the index scope (ONE rule source, scope.py),
         # not the index row's own childless subtree.
         allowed = set(index_ids) if index_ids is not None else _subtree_ids(children, scope_root)

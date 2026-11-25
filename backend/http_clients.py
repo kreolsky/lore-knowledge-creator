@@ -18,16 +18,19 @@
 #
 # The pool is process-wide and BOTH processes close it (main.py lifespan,
 # jobs/worker._on_worker_shutdown → close_all()). A closed client left in the
-# pool is rebuilt on next use — the is_closed guard every former singleton
-# carried, so a TestClient lifespan close must not poison the next request.
+# pool is rebuilt on next use — a TestClient lifespan close must not poison
+# the next request.
 # Deliberately NOT pooled: routes/health.py (a probe must not share a
 # possibly-wedged pool with what it probes), pipeline/extractor/utils.py
 # (one call per worker job — no pool to gain) and `isolated_client` below.
 """
+import contextlib
 import functools
 import ssl
+from collections.abc import AsyncIterator
 
 import httpx
+from logging_conf import hide_url_path
 
 _clients: dict[str, httpx.AsyncClient] = {}
 
@@ -39,8 +42,12 @@ def outbound_tls_context() -> ssl.SSLContext:
     return httpx.create_ssl_context(trust_env=False)
 
 
-def isolated_client(*, timeout: float | httpx.Timeout) -> httpx.AsyncClient:
-    """A client that lives for ONE exchange; the caller closes it.
+@contextlib.asynccontextmanager
+async def isolated_client(
+    *, timeout: float | httpx.Timeout,
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A client that lives for ONE exchange: closed at the end of the block,
+    inside which request lines log no URL path (backend/logging_conf.py).
 
     # INVARIANT(security): an exchange carrying a user's credential never shares
     # a client with another exchange.
@@ -49,9 +56,14 @@ def isolated_client(*, timeout: float | httpx.Timeout) -> httpx.AsyncClient:
     # with user B's request, and hands host B a TLS connection whose certificate
     # was only checked for host A.
     """
-    return httpx.AsyncClient(
+    async with httpx.AsyncClient(
         timeout=timeout, verify=outbound_tls_context(), trust_env=False,
-    )
+    ) as client:
+        token = hide_url_path.set(True)
+        try:
+            yield client
+        finally:
+            hide_url_path.reset(token)
 
 
 def get_http_client(name: str, *, timeout: float | httpx.Timeout) -> httpx.AsyncClient:

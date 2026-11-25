@@ -210,11 +210,18 @@ async def test_scoped_key_enumerates_scope_only_with_no_outside_counters(
         assert "subtree_total" not in d, "counters must not see outside the wall"
         assert "subtree_depth" not in d
 
-    # An explicit start_id OUTSIDE the wall is overridden, not honored (today's
-    # enforcement shape — the wall narrows, it never 403s here).
+    # An empty start_id is an omitted one.
+    assert await _structure(client, scoped, {"start_id": ""}) == out
+
+    # A start_id INSIDE the wall is honored, depth counts from it.
+    inner = await _structure(client, scoped, {"start_id": t["b"], "depth": 1})
+    assert [d["document_id"] for d in inner["documents"]] == [t["b"], t["c"]]
+
+    # OUTSIDE the wall answers exactly like an id that does not exist.
     out2 = await _structure(client, scoped, {"start_id": t["idx"]})
-    ids2 = {d["document_id"] for d in out2["documents"]}
-    assert ids2 == {t["a"], t["b"], t["c"]}
+    unknown = await _structure(client, scoped, {"start_id": "no-such-document"})
+    assert out2 == unknown
+    assert out2["documents"] == []
 
 
 @pytest.mark.asyncio

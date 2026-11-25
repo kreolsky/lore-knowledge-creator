@@ -4,9 +4,9 @@ Pure data — imports nothing (leaf), mirroring specs/skills.py.
 # ARCH: the pack is agent-only (surfaces agent + tool_api, never mcp) and
 # console-key-gated at the handler (`_require_console_key`, the same predicate
 # as sandbox_bash): an external MCP client or a subtree-scoped key must never
-# spend the user's personal keys. The value never reaches the model — the
-# handler injects the header and scrubs the value (three encoded forms) from
-# everything it returns (SYSTEM: user-secrets).
+# spend the user's personal keys. The value and the hidden base path never
+# reach the model — the handler injects the header and the path and scrubs
+# both (their encoded forms) from everything it returns (SYSTEM: user-secrets).
 """
 
 LIST_SECRETS_TOOL: dict = {
@@ -16,11 +16,11 @@ LIST_SECRETS_TOOL: dict = {
         "name": "list_secrets",
         "description": (
             "List the user's personal keys you may spend with http_request: "
-            "{name, description, hosts} per row. Only `enabled` rows are "
-            "listed. The VALUE is never shown to you — it is injected "
-            "server-side into the request header; never ask the user to "
-            "paste a key into the chat. Rows are managed in the cabinet "
-            "(Lore's settings), not by any tool."
+            "{name, description, hosts, hidden_base_path} per row. Only "
+            "`enabled` rows are listed. The VALUE and the base path are never "
+            "shown to you — they are injected server-side into the request; "
+            "never ask the user to paste a key into the chat. Rows are "
+            "managed in the cabinet (Lore's settings), not by any tool."
         ),
         "parameters": {
             "type": "object",
@@ -39,12 +39,17 @@ HTTP_REQUEST_TOOL: dict = {
             "(`secret`, by name from list_secrets). The key's VALUE never "
             "reaches you: the server injects it into the header the row "
             "names (usually `Authorization: Bearer …`) and scrubs it from "
-            "everything you see. The URL's host must be one of the secret's "
-            "bound hosts — a key saved for `api.example.com` cannot be sent "
-            "anywhere else; a bound host `*.example.com` covers its "
-            "subdomains. Some rows carry the key in a URL query parameter "
-            "instead — the server adds it; never put a key in the URL "
-            "yourself. Plain http is not supported. Redirects are never followed (a 3xx is returned as "
+            "everything you see. Some rows carry a hidden base path "
+            "(`hidden_base_path: true`): write the URL as host plus the "
+            "service's own path, `https://host/export/daily` — the server "
+            "inserts the hidden part. Where a result shows `[secret]` in an "
+            "address, call it with that part left out. The URL's host must "
+            "be one of the secret's bound hosts — a key saved for "
+            "`api.example.com` cannot be sent anywhere else; a bound host "
+            "`*.example.com` covers its subdomains. Some rows carry the key "
+            "in a URL query parameter instead — the server adds it; never "
+            "put a key in the URL yourself. Plain http is not supported. "
+            "Redirects are never followed (a 3xx is returned as "
             "the result). GET and HEAD run silently; every other method "
             "needs the user's approval on THIS call even in auto mode — a "
             "foreign write under the user's name has no history to roll "
@@ -68,7 +73,9 @@ HTTP_REQUEST_TOOL: dict = {
                     "description": (
                         "Full `https://` URL. Its host (and port, when not "
                         "443) must match one of this secret's bound hosts "
-                        "(a `*.domain` entry matches its subdomains)."
+                        "(a `*.domain` entry matches its subdomains). With "
+                        "`hidden_base_path: true`, host plus the service's "
+                        "own path — the server inserts the hidden part."
                     ),
                 },
                 "method": {

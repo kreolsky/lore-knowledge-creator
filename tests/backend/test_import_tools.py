@@ -163,7 +163,7 @@ async def test_create_document_normalize_true_reflows_md_text(
         "parent_id": None, "apply": "auto",
     }, headers=_hdr(agent_tok))
     assert resp.status_code == 200, resp.text
-    doc_id = resp.json()["doc_id"]
+    doc_id = resp.json()["document_id"]
     content = await _read_content(client, token, doc_id)
     # Reflowed: the soft-wrapped newlines are folded into one logical line.
     assert "\n" not in content.strip()

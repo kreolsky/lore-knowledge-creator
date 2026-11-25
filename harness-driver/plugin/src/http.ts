@@ -56,7 +56,7 @@ export async function handleRequest(
     } else if (req.method === 'POST' && url.endsWith('/followup')) {
       await followup(ctx, map, tap, channel, req, res)
     } else if (req.method === 'POST' && url.endsWith('/stop')) {
-      await stop(ctx, map, req, res)
+      await stop(map, req, res)
     } else if (req.method === 'POST' && url.endsWith('/inbox/discard')) {
       await inboxDiscard(map, req, res)
     } else if (req.method === 'GET' && url.startsWith('/session-status')) {

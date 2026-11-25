@@ -119,10 +119,10 @@ async def test_exact_mode_matches_literal_string_only(client, test_db, fts_proje
         for h in ex["hits"]:
             rows = await db.query(
                 "SELECT title, content FROM documents WHERE meta::id(id) = $id",
-                {"id": h["doc_id"]},
+                {"id": h["document_id"]},
             )
             row = rows[0] if isinstance(rows, list) and rows else {}
             blob = f"{row.get('title') or ''} {row.get('content') or ''}".lower()
             assert q.lower() in blob, (
-                q, h["doc_id"], "exact hit must literally contain the query string"
+                q, h["document_id"], "exact hit must literally contain the query string"
             )

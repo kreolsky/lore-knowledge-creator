@@ -50,7 +50,7 @@ async def test_search_excludes_doc_without_access(client, test_db, admin_user,
     result = await _search_materials_exec(
         project_id=pid, user=_user(_regular_uid), query="dragon", k=5,
     )
-    ids = {h["doc_id"] for h in result["hits"]}
+    ids = {h["document_id"] for h in result["hits"]}
     assert "search-private-1" not in ids
 
 

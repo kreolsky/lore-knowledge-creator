@@ -224,7 +224,7 @@ async def test_scoped_search_returns_only_subtree(client, test_db, admin_user, p
     )
     assert resp.status_code == 200, resp.text
     hits = resp.json()["hits"]
-    hit_ids = {h["doc_id"] for h in hits}
+    hit_ids = {h["document_id"] for h in hits}
     assert outside not in hit_ids, "outside doc leaked into scoped search"
 
 

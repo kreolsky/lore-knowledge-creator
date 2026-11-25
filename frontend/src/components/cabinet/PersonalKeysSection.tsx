@@ -16,11 +16,11 @@ import { Button, CenterHeading, FieldCheckbox, FieldInput, IconButton, Segmented
 import { useTranslation } from '../../i18n';
 
 /** One personal key row from GET /api/cabinet/secrets — metadata only.
- * INVARIANT(security): the value never reaches the client; `is_set` false
- * means "re-enter key" (the ciphertext no longer decrypts).
+ * INVARIANT(security): the value and the base path never reach the client;
+ * `is_set` false means "re-enter key", `has_base_path` only says a path is stored.
  * Why: the browser is outside the vault's trust boundary — chat frames relay
  * payloads toward the model and a leaked session cookie reads the cabinet —
- * so the value exists only in the server-side Fernet ciphertext. */
+ * so both exist only in the server-side Fernet ciphertext. */
 interface SecretRow {
   name: string;
   description: string;
@@ -30,6 +30,7 @@ interface SecretRow {
   query_param: string;
   enabled: boolean;
   is_set: boolean;
+  has_base_path: boolean;
   updated_at: string | null;
 }
 
@@ -69,8 +70,8 @@ type SecretBody = Record<string, unknown>;
 const NEW_PANEL = '+new';
 
 /** Create/edit form — one instance at a time; `key` at the mount site resets it.
- * INVARIANT(security): the value field is write-only — the API never returns
- * it, and the form never echoes it back (edit prefill leaves it empty).
+ * INVARIANT(security): the value and base path fields are write-only — the API never
+ * returns them, and the form never echoes them back (edit prefill leaves them empty).
  * Why: an echoed value would land in React state, devtools and any future
  * toast — the exact surfaces the vault keeps the key out of. */
 function SecretForm({ initial, disabled, error, onSave, onCancel }: {
@@ -86,12 +87,15 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [hostsInput, setHostsInput] = useState(initial?.hosts.join(', ') ?? '');
   const [value, setValue] = useState('');
+  const [basePath, setBasePath] = useState('');
   const [preset, setPreset] = useState<Preset>(initialPreset);
   const [queryParam, setQueryParam] = useState(initial?.query_param || 'key');
   const [headerName, setHeaderName] = useState(initialPreset === 'custom' ? initial?.header_name ?? '' : '');
   const [headerTemplate, setHeaderTemplate] = useState(initialPreset === 'custom' ? initial?.header_template ?? '' : '');
-  // A non-default auth must not hide behind a closed toggle.
-  const [advancedOpen, setAdvancedOpen] = useState(initialPreset !== 'bearer');
+  // A non-default auth, or a path stored or to re-enter, must not hide behind a closed toggle.
+  const [advancedOpen, setAdvancedOpen] = useState(
+    initialPreset !== 'bearer' || (!!initial && (initial.has_base_path || !initial.is_set)),
+  );
 
   const hosts = parseHosts(hostsInput);
   // Moving a key needs the value again — the server refuses otherwise (see
@@ -103,6 +107,7 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
     preset === 'basic' && t('secretBasicValuePlaceholder'),
     t('secretValuePlaceholder'),
   ].find(Boolean) as string;
+  const pathValue = basePath.trim();
 
   const authFields = (): SecretBody => {
     if (preset === 'query') {
@@ -122,12 +127,15 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
       hosts,
       ...authFields(),
       ...(value ? { value } : {}),
+      ...(pathValue ? { base_path: pathValue } : {}),
     });
   };
 
+  // What the server refuses in words (a part missing on a move, a key with
+  // neither value nor path) is not repeated here.
   const canSave = hosts.length > 0
     && (preset !== 'query' || !!queryParam.trim())
-    && (initial ? !(hostsChanged && !value) : !!name.trim() && !!value);
+    && (initial ? !(hostsChanged && !value && !pathValue) : !!name.trim() && (!!value || !!pathValue));
 
   return (
     <div className="flex flex-col gap-2">
@@ -239,6 +247,18 @@ function SecretForm({ initial, disabled, error, onSave, onCancel }: {
               <p className="text-xs text-text-dim -mt-1">{t('secretHeaderHint')}</p>
             </>
           )}
+          {/* A secret like the value: password type, never prefilled. */}
+          <FieldInput
+            onPanel
+            className="font-mono"
+            type="password"
+            value={basePath}
+            onChange={e => setBasePath(e.target.value)}
+            placeholder={initial?.has_base_path ? t('secretKeepValue') : t('secretBasePathPlaceholder')}
+            autoComplete="new-password"
+            maxLength={1024}
+            disabled={disabled}
+          />
         </>
       )}
       <div className="flex gap-2 items-center">

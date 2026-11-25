@@ -1,11 +1,13 @@
 """Tool-API — personal secrets: list_secrets + http_request (SYSTEM: user-secrets).
 
 The agent-facing half of the vault (backend/user_secrets.py holds the rows):
-`list_secrets` shows the caller's enabled rows (name/description/hosts — never
-a value); `http_request` spends one row against a host it is BOUND to. The
-plaintext exists only between `decrypt_value` and the outbound header here,
-and everything the call returns — status text, headers, body, error text — is
-scrubbed of the value and its common encodings before anything else sees it.
+`list_secrets` shows the caller's enabled rows (name/description/hosts and the
+`hidden_base_path` flag — never a value, never the path); `http_request` spends
+one row against a host it is BOUND to, putting the row's hidden base path in
+front of the path the model wrote. The plaintext — the value and the base
+path — exists only between `open_parts` and the outbound request here, and
+everything the call returns — status text, headers, body, error text — is
+scrubbed of both and their common encodings before anything else sees it.
 
 # ARCH (dsh comparison, recorded per the rented-brain rule): dsh ships no
 # per-user credential vault and no egress-guarded fetch — `vendor/dsh/`
@@ -27,8 +29,9 @@ scrubbed of the value and its common encodings before anything else sees it.
 
 import asyncio
 import base64
+import re
 import uuid
-from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlencode, urlsplit
 
 import egress_guard
 import http_clients
@@ -62,11 +65,13 @@ _SILENT_METHODS = frozenset({"GET", "HEAD"})
 #: Header names the agent can never set: the dial's Host and the credential
 #: header are server-owned; length and framing are httpx's; accept-encoding
 #: because a coding httpx cannot decode would carry a reflected value past the
-#: scrub; the method overrides because they turn a silent GET into a write.
+#: scrub; the method overrides because they turn a silent GET into a write; the
+#: URL overrides because a service honouring them answers for a path outside
+#: the hidden base path.
 _AGENT_FORBIDDEN_HEADERS = frozenset({
     "host", "authorization", "content-length", "transfer-encoding",
     "accept-encoding", "x-http-method-override", "x-http-method",
-    "x-method-override",
+    "x-method-override", "x-original-url", "x-rewrite-url",
 })
 
 
@@ -92,9 +97,11 @@ async def tool_list_secrets(
     body: ToolListSecrets = Body(default_factory=ToolListSecrets),
     ctx: dict = Depends(get_agent_context),
 ):
-    """The caller's enabled personal keys as {name, description, hosts} — the
-    model-facing catalog `http_request` spends from. The value is structurally
-    absent: it never leaves the Fernet ciphertext and this domain's dial."""
+    """The caller's enabled personal keys as {name, description, hosts,
+    hidden_base_path} — the model-facing catalog `http_request` spends from.
+    The value and the base path are structurally absent: they never leave the
+    Fernet ciphertext and this domain's dial; the flag only says the model
+    must write its URL without the hidden part."""
     _require_console_key(ctx)
     db = await get_db()
     rows = await user_secrets.list_rows(db, ctx["user_id"])
@@ -103,6 +110,7 @@ async def tool_list_secrets(
             "name": r.get("name"),
             "description": r.get("description") or "",
             "hosts": list(r.get("hosts") or []),
+            "hidden_base_path": user_secrets.has_base_path(r),
         }
         for r in rows if r.get("enabled")
     ]}
@@ -111,21 +119,36 @@ async def tool_list_secrets(
 # ─── http_request: the pieces ─────────────────────────────────────────────────
 
 
-def _scrub_forms(value: str) -> list[str]:
-    """The encodings a reflection could carry the value in: raw, both base64
-    alphabets, and the url-encoded variants (with and without reserved chars)."""
-    if not value:
-        return []
-    raw_b = value.encode("utf-8")
-    forms = {
-        value,
+def _spellings(secret: str) -> list[str]:
+    """The encodings a reflection could carry ONE string in: raw, the `\\/`
+    spelling of JSON, both base64 alphabets, and the url-encoded variants
+    (with and without reserved chars, upper- and lower-case percent hex)."""
+    raw_b = secret.encode("utf-8")
+    encoded = [quote(secret), quote(secret, safe=""), quote_plus(secret)]
+    return [
+        secret,
+        secret.replace("/", "\\/"),
         base64.b64encode(raw_b).decode(),
         base64.urlsafe_b64encode(raw_b).decode(),
-        quote(value),
-        quote(value, safe=""),
-        quote_plus(value),
-    }
-    return [f for f in forms if f]
+        *encoded,
+        *(re.sub(r"%[0-9A-F]{2}", lambda m: m[0].lower(), e) for e in encoded),
+    ]
+
+
+def _scrub_forms(value: str, base_path: str) -> list[str]:
+    """The forms every served byte and error text is scrubbed of, longest
+    first so `/p/login` becomes `[secret]/login` and never `/[secret]/login`,
+    and a value that is a piece of the path never leaves the rest of it. The
+    path goes without its trailing slash (the model's own part stays visible
+    after `[secret]`), and again without the leading one — a framework echoes
+    a path parameter that way. As saved it adds base64 alone: that encoding
+    of a longer string starts with the path's own only at some lengths."""
+    forms = _spellings(value) if value else []
+    for saved in filter(None, (base_path, base_path.lstrip("/"))):
+        forms += _spellings(saved.rstrip("/"))
+        raw_b = saved.encode("utf-8")
+        forms += [base64.b64encode(raw_b).decode(), base64.urlsafe_b64encode(raw_b).decode()]
+    return sorted(dict.fromkeys(forms), key=len, reverse=True)
 
 
 def _scrub(text: str, forms: list[str]) -> str:
@@ -140,8 +163,35 @@ def _scrub_bytes(data: bytes, forms: list[str]) -> bytes:
     return data
 
 
-def _parse_target_url(url: str) -> tuple[str, int | None, str]:
-    """(host, port, path+query) of the agent's URL, after the shape gates.
+def _require_under_base(path: str) -> None:
+    """Refuse the model's own path when one of its segments could climb.
+
+    # INVARIANT(security): the dialled path is always under the base path.
+    # Why: httpx folds `/base/../x` into `/x` and sends `%2e%2e`, `..%2F` and
+    # `..\\` untouched, and a service may unfold them after us — a dot segment
+    # in the model's path would leave the base. Only with a base path: a key
+    # without one already reaches any path of its host.
+    """
+    head = path.partition("?")[0]
+    while True:  # percent-decode until it stops changing (`%252e` → `%2e` → `.`)
+        decoded = unquote(head)
+        if decoded == head:
+            break
+        head = decoded
+    # A backslash, `?` and `#` split too (a service may read them as
+    # separators), and a segment ends at `;` (path parameters). The detail
+    # never quotes the path.
+    for segment in re.split(r"[/\\?#]", head):
+        if segment.split(";", 1)[0] in (".", ".."):
+            raise HTTPException(
+                status_code=422,
+                detail="the URL path cannot contain `.` or `..` segments",
+            )
+
+
+def _parse_target_url(url: str, base_path: str = "") -> tuple[str, int | None, str]:
+    """(host, port, path+query) of the agent's URL, after the shape gates —
+    with a base path, a path that stays under it is one of them.
 
     # INVARIANT(security): https only, no userinfo, a real host — the shape
     # checks run BEFORE the host binding.
@@ -178,6 +228,8 @@ def _parse_target_url(url: str) -> tuple[str, int | None, str]:
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
+    if base_path:
+        _require_under_base(path)
     return host, port, path
 
 
@@ -186,14 +238,15 @@ def _outbound_headers(
 ) -> dict[str, str]:
     """Merge the agent's headers with the injected credential — the server
     owns Host, Authorization and the row's header_name, so the agent's copy of
-    any of them is dropped and the injected header always wins."""
+    any of them is dropped and the injected header always wins. An empty
+    value (a base-path-only row) injects nothing."""
     header_name = (row.get("header_name") or "").strip()
     banned = _AGENT_FORBIDDEN_HEADERS | ({header_name.lower()} if header_name else set())
     out = {
         k: v for k, v in agent_headers.items()
         if k.strip().lower() not in banned
     }
-    if header_name and not (row.get("query_param") or ""):
+    if value and header_name and not (row.get("query_param") or ""):
         template = row.get("header_template") or user_secrets.DEFAULT_HEADER_TEMPLATE
         out[header_name] = user_secrets.render_header_template(template, value)
     return out
@@ -216,23 +269,37 @@ def _inject_query_key(path: str, query_param: str, value: str) -> str:
     return f"{base}?{urlencode(kept, quote_via=quote, safe='')}"
 
 
+def _join_base_path(base_path: str, path: str) -> str:
+    """The dialled path: the stored base path in front of the model's own
+    path. A root path (only slashes) becomes the base exactly as saved; the
+    query passes byte for byte."""
+    head, sep, query = path.partition("?")
+    if not head.strip("/"):
+        return base_path + sep + query
+    return base_path.rstrip("/") + "/" + head.lstrip("/") + sep + query
+
+
 def _outbound_request(
-    body: ToolHttpRequest, row: dict, value: str,
+    body: ToolHttpRequest, row: dict, value: str, base_path: str,
     host: str, port: int | None, path: str,
 ) -> tuple[dict[str, str], str]:
-    """(headers, path) as dialled: the credential in its header, or — query
-    mode — appended to the path; Host pinned to the bound name."""
+    """(headers, path) as dialled: the hidden base path in front of the
+    model's path (the path was gated by `_require_under_base`), the
+    credential in its header or — query mode — appended to the path; an empty
+    value sends neither; Host pinned to the bound name."""
     headers = _outbound_headers(body.headers or {}, row, value)
+    if base_path:
+        path = _join_base_path(base_path, path)
     query_param = row.get("query_param") or ""
-    if query_param:
+    if query_param and value:
         path = _inject_query_key(path, query_param, value)
     headers["Host"] = host if port is None or port == 443 else f"{host}:{port}"
     return headers, path
 
 
-async def _resolve_secret(db, ctx: dict, name: str) -> tuple[dict, str]:
-    """(row, plaintext) for the caller's enabled secret `name` — the handler's
-    only decrypt site, so the value's lifetime is this one call."""
+async def _resolve_secret(db, ctx: dict, name: str) -> tuple[dict, str, str]:
+    """(row, value, base_path) for the caller's enabled secret `name` — the
+    handler's only decrypt site, so both secrets' lifetime is this one call."""
     row = await user_secrets.get_row(db, ctx["user_id"], name)
     if not row or not row.get("enabled"):
         raise HTTPException(
@@ -251,14 +318,14 @@ async def _resolve_secret(db, ctx: dict, name: str) -> tuple[dict, str]:
             detail=f"{name!r} is an MCP server key — the chat's MCP servers "
                    "spend it, not http_request",
         )
-    value = user_secrets.decrypt_value(row.get("ciphertext") or "")
-    if value is None:
+    parts = user_secrets.open_parts(row.get("ciphertext") or "")
+    if parts is None:
         raise HTTPException(
             status_code=409,
             detail="the stored key can no longer be decrypted — ask the user "
                    "to re-enter it in the cabinet (Lore settings)",
         )
-    return row, value
+    return row, parts[0], parts[1]
 
 
 async def _exchange(
@@ -412,17 +479,18 @@ async def tool_http_request(
     # a frame, a REST response or the model context.
     # Why: sandbox_bash returns stdout to the model, so any secret in a
     # command's env can be printed; the box is one shared unix account with
-    # open internet. On THIS handler that means the value exists only in
-    # `value` and the outbound header; `_dial` scrubs every error text and
-    # `_response_result` every served byte BEFORE anything else sees them;
-    # a redirect is returned, never followed (a 3xx Location cannot carry the
-    # key to a second host).
+    # open internet. On THIS handler that means the value and the base path
+    # exist only in `value`/`base_path`, the outbound header and the dialled
+    # path; `_dial` scrubs every error text and `_response_result` every
+    # served byte of both BEFORE anything else sees them; a redirect is
+    # returned, never followed (a 3xx Location cannot carry the key to a
+    # second host).
     """
     _require_console_key(ctx)
     db = await get_db()
-    row, value = await _resolve_secret(db, ctx, body.secret)
+    row, value, base_path = await _resolve_secret(db, ctx, body.secret)
 
-    host, port, path = _parse_target_url(body.url)
+    host, port, path = _parse_target_url(body.url, base_path)
     _require_bound_host(row, body.secret, host, port)
 
     # A silent method carries no body: a read that sends data is a write, and
@@ -443,7 +511,7 @@ async def tool_http_request(
         # not spend the key against the host first.
         await _require_sandbox_configured()
 
-    headers, path = _outbound_request(body, row, value, host, port, path)
-    forms = _scrub_forms(value)
+    headers, path = _outbound_request(body, row, value, base_path, host, port, path)
+    forms = _scrub_forms(value, base_path)
     resp, data = await _dial(body, host, port, path, headers, forms)
     return await _response_result(resp, data, body, forms, ctx)

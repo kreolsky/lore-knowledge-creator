@@ -224,7 +224,8 @@ READ_TOOLS: list[dict] = [
                         "type": "string",
                         "description": (
                             "Optional: enumerate this document's whole subtree. "
-                            "Omitted = the root orientation map."
+                            "Omitted = the root orientation map; under a "
+                            "subtree-scoped key, the key's whole subtree."
                         ),
                     },
                     "depth": {
@@ -249,7 +250,8 @@ READ_TOOLS: list[dict] = [
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "start_id calls only (422 on a root call): add H1–H4 "
+                            "start_id calls only (422 on a root call; a "
+                            "subtree-scoped key needs no start_id): add H1–H4 "
                             "outlines to document rows."
                         ),
                     },

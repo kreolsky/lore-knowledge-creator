@@ -139,7 +139,8 @@ async def test_member_cannot_change_run_or_schedule_another_users_digest(client,
 
 @pytest.mark.asyncio
 async def test_member_may_not_delete_another_users_digest(client, collab_project):
-    """A full member cannot delete a digest binding someone else created; its author
+    """A full member cannot delete a digest binding someone else created, nor stop,
+    start, re-time or delete its schedule; its author
     can, and the delete takes its schedule rows with it — one left ticking into a
     missing binding records an error every interval. An extractor schedule names
     documents, not a binding, so it is left alone."""
@@ -157,8 +158,16 @@ async def test_member_may_not_delete_another_users_digest(client, collab_project
         "created_by": admin_uid,
     })
 
-    refused = await client.delete(f"/api/agent-config/{config_id}", cookies={"lore_session": user_token})
-    assert refused.status_code == 403, refused.text
+    path = f"/api/pipeline-schedules/{schedule.json()['schedule_id']}"
+    cookies = {"lore_session": user_token}
+    refused = [
+        await client.delete(f"/api/agent-config/{config_id}", cookies=cookies),
+        await client.delete(path, cookies=cookies),
+        *[await client.patch(path, json=body, cookies=cookies) for body in (
+            {"enabled": False}, {"enabled": True}, {"interval_s": 60},
+            {"enabled": False, "interval_s": 60}, {})],
+    ]
+    assert [r.status_code for r in refused] == [403] * 7, [r.text for r in refused]
 
     resp = await client.delete(f"/api/agent-config/{config_id}", cookies={"lore_session": admin_token})
 

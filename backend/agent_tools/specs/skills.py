@@ -27,7 +27,7 @@ SAVE_SKILL_TOOL: dict = {
             "`files` copies sandbox files into the skill as child documents, "
             "later materialized by `sandbox_fetch_skill`. On an update, omit "
             "`spec` / `files` to keep them. A shipped skill's name is refused "
-            "(409). Returns {status, doc_id, spec_doc_id, name, files}."
+            "(409). Returns {status, document_id, spec_doc_id, name, files}."
         ),
         "parameters": {
             "type": "object",

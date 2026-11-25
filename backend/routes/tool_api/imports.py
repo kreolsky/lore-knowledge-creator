@@ -372,7 +372,7 @@ async def _create_binary_reference(
         )
         # save_upload derives nothing for "file" (no thumbnail, no transcription);
         # it emits reference_created like every media type.
-        return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+        return {"status": "applied", "reference_id": ref_id, "document_id": ref_id}
 
     if media_type == "audio":
         # see SYSTEM: capability-tiers — the audio arm queues STT, so it is
@@ -393,7 +393,7 @@ async def _create_binary_reference(
             from transcription import enqueue_transcription
 
             await enqueue_transcription(user.get("user_id", ""), ref_id)
-        return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+        return {"status": "applied", "reference_id": ref_id, "document_id": ref_id}
 
     # image
     max_image_mb = await settings.get("MAX_IMAGE_SIZE_MB")
@@ -407,7 +407,7 @@ async def _create_binary_reference(
         created_by=user.get("user_id"), created_by_name=byline,
     )
     # save_upload enqueues the thumbnail for images + emits reference_created.
-    return {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+    return {"status": "applied", "reference_id": ref_id, "document_id": ref_id}
 
 
 _HTML_SUFFIXES = (".html", ".htm")
@@ -433,7 +433,7 @@ async def _import_html_page(
         user=user, scope_root=scope_root, media_type=ARTIFACT_MEDIA_TYPE,
     )
     return {
-        "status": "applied", "doc_id": created["doc_id"],
+        "status": "applied", "document_id": created["doc_id"],
         "sort_key": created.get("sort_key"), "image_references": [],
     }
 
@@ -563,7 +563,7 @@ async def _import_document(
         )
         rid = created["doc_id"]
         return {
-            "status": "applied", "reference_id": rid, "doc_id": rid,
+            "status": "applied", "reference_id": rid, "document_id": rid,
             "image_references": image_refs,
         }
     created = await create_document_via_collab(
@@ -572,7 +572,7 @@ async def _import_document(
         import_tables=markdown_body,
     )
     return {
-        "status": "applied", "doc_id": created["doc_id"],
+        "status": "applied", "document_id": created["doc_id"],
         "sort_key": created.get("sort_key"), "image_references": image_refs,
     }
 

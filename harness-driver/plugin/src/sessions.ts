@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import type http from 'node:http'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { buildForkSeed, interruptedTurnClosers, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'

@@ -663,6 +663,33 @@ def http_pool(monkeypatch):
     return install
 
 
+# ─── The ONE sandbox SFTP write seam (SYSTEM: agent-sandbox) ─────────────────
+
+
+@pytest.fixture
+def sftp_write(monkeypatch):
+    """Sandbox configured + the SFTP write seam recorded as {rel_path: bytes}
+    (rel to the caller's workspace)."""
+    from helpers import pin_tool_gates
+    from routes.tool_api import sandbox
+    from routes.tool_api.sandbox import (  # noqa: F401 — submodules own the seams
+        bash,
+        files,
+        lifecycle,
+        runs,
+        transport,
+    )
+
+    pin_tool_gates(monkeypatch, sandbox=True)
+    writes: dict[str, bytes] = {}
+
+    async def _fake_write(ws_path: str, data: bytes):
+        writes[ws_path] = data
+
+    monkeypatch.setattr(sandbox.files, "_sftp_write", _fake_write)
+    return writes
+
+
 from helpers import make_token, wipe_project_children_sql
 
 

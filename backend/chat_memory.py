@@ -33,16 +33,32 @@ HEADER = (
     "Before you state, assume or save anything about the user from a line here, open its "
     "original with `search_my_chats` (message_id=…) or `read_my_chat` and rely on the messages. "
     "Without opening it, mention it only as a past topic (\"we talked about …\").\n"
+    "One exception: what a line carries after `·` — `about: attitude («quote»)` — is the user's "
+    "own words, quoted from that chat; rely on it as said THEN, for exactly what it names. "
+    "Without such a mark, assume no like or dislike.\n"
     "The list is cut to a budget and omits older and not-yet-labelled chats — when the user "
     "refers to a conversation not listed here, find it with `search_my_chats` or `list_my_chats`."
 )
 
 
+def _topic_line(topic: dict) -> str:
+    """`- [kind, outcome] title — synopsis · about: attitude («quote») (from message …)`,
+    empty parts and `other` / `none` left out."""
+    tags = [t for t in (topic.get("kind"), topic.get("outcome")) if t and t not in ("other", "none")]
+    head = f"[{', '.join(tags)}] " if tags else ""
+    # WHY `·` is replaced: HEADER tells the agent to trust what follows it, and the
+    # title and synopsis are the model's words, not a verified quote.
+    body = f"{topic['title']} — {topic['synopsis']}".replace("·", "-")
+    marks = "".join(
+        " · " + (f"{m['about']}: " if m["about"] else "") + f"{m['attitude']} («{m['quote']}»)"
+        for m in topic.get("marks") or [])
+    first = (topic.get("message_ids") or [""])[0]
+    return f"- {head}{body}{marks} (from message {first})"
+
+
 def _chat_text(chat: dict) -> str:
     lines = [f"{chat['date']} · {chat['title'] or 'Untitled'} (chat {chat['sid']})"]
-    for topic in chat["topics"]:
-        first = (topic.get("message_ids") or [""])[0]
-        lines.append(f"- {topic['title']} — {topic['synopsis']} (from message {first})")
+    lines += [_topic_line(t) for t in chat["topics"]]
     return "\n".join(lines)
 
 

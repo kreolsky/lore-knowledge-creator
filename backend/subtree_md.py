@@ -1050,7 +1050,9 @@ async def import_subtree_zip(
 
     return {
         "status": "applied",
-        "root_id": root_id,
+        # The root the import created, as the document it is: `document_id` is
+        # what the next tool takes. None when the zip has no single top folder.
+        "document_id": root_id,
         "documents": len(docs),
         "references": assets.count,
     }

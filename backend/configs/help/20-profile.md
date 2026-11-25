@@ -28,9 +28,10 @@ A key has:
 - **value** — leave the field empty when editing to keep the stored key;
 - **hosts** — where the key may be sent: the server name from the API address (for `https://api.openai.com/v1/…` it is `api.openai.com`), with a port only if it is not 443. `*.example.com` covers all subdomains; list `example.com` itself separately;
 - **how it is passed** — Bearer, X-API-Key, Basic (enter `login:password`), in the URL as a query parameter, or custom: your own header, with `{{value}}` replaced by the key and `{{value_b64}}` by its base64;
+- **base path** (in Advanced) — for a service whose secret is the address itself: the hidden start of the address, at least 16 characters, for example `/x7f3d9a2b1c4e6f80/`. The agent never sees it; it writes the rest of the address and the server adds this part to every call. Stored encrypted like the value and never shown again. A key may consist of the base path alone, with no value: a webhook address, called without a key. Leave the field empty when editing to keep the stored one; to change the hosts, enter the key and the base path again;
 - **Available to the agent** — the switch that lets the agent use the key.
 
-What the agent can do with a key: send HTTPS requests to the key's hosts only. Reading requests (GET, HEAD) run at once; any request that sends data asks your approval every time, even with "Auto" checked. Redirects are not followed, and the key's value is removed from everything the agent reads back. External agents connected through an API key (see [External agent (MCP)](help:external-agent)) never get your keys.
+What the agent can do with a key: send HTTPS requests to the key's hosts only. Reading requests (GET, HEAD) run at once — also to an address that acts on a GET, so a webhook with a base path runs without asking; any request that sends data asks your approval every time, even with "Auto" checked. Redirects are not followed, and the key's value and base path are removed from everything the agent reads back. External agents connected through an API key (see [External agent (MCP)](help:external-agent)) never get your keys.
 
 If a key no longer decrypts (for example, after a restore from backup), it is marked "Re-enter key".
 

@@ -27,6 +27,7 @@ import logging
 from agent_skills import shipped_skill_docs
 
 from db import fetch_one
+from scope import out_of_scope_detail, resolve_index_scope
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,11 @@ SCOPE
 - create_document without parent_id lands under the scope root (not the
   project root).
 - move_document with parent_id null lands under the scope root too (not the
-  project root)."""
+  project root).
+- The project's rules and skills lie outside this key's scope: `skills_index` is
+  empty, and their documents cannot be read. A key on the project index works in
+  the whole project, so it gets the rules' text in `rules` and follows it; for
+  any other key `rules` is empty."""
 
 # ARCH: binary key model — the MCP surface has NO
 # proposal/confirmation step. A read-write key applies every write directly (each
@@ -204,8 +209,6 @@ async def _render_bootstrap() -> str:
 async def _build_instructions(scope_root: str, root_title: str) -> str:
     """Render the instructions tier. Scoped keys additionally get a SCOPE section
     (the out-of-scope 403 is retained by decision — F1)."""
-    from scope import out_of_scope_detail
-
     text = await _render_bootstrap()
     if not scope_root:
         return text
@@ -218,25 +221,44 @@ async def _build_instructions(scope_root: str, root_title: str) -> str:
     return text + "\n\n" + scope_section
 
 
+async def _config_docs(project_id: str, scope_root: str) -> dict:
+    """The project's agent-config documents init may show this key: all of them for a
+    whole-project key, the rules alone for a key on the project index, none for a key on
+    an ordinary subtree.
+
+    # INVARIANT(security): init hands a key on an ordinary subtree no text or title of the
+    # config tree, and a key on the project index its rules only.
+    # Why: the config tree is outside both scopes and read_document refuses it with 403 —
+    # inlined here, a subtree key receives documents it may not read. An index key stands
+    # for the whole project: only the project's owner mints one, and the rules bind whoever
+    # works in the whole project, so it gets their text from init and nowhere else. A
+    # skill index would be ids that key can never open.
+    """
+    from agent_config import ensure_agent_system_docs, load_agent_system_docs
+
+    if scope_root and await resolve_index_scope(scope_root, project_id) is None:
+        return {}
+    # ensure → load. Idempotent (deterministic ids) so repeated init never
+    # duplicates the skeleton.
+    await ensure_agent_system_docs(project_id)
+    docs = await load_agent_system_docs(project_id)
+    if not scope_root:
+        return docs
+    return {key: docs.get(key) for key in ("rules_folder", "rules_children")}
+
+
 async def build_init_package(ctx: dict) -> dict:
     """Assemble the tiered init package for the authenticated agent's project.
 
     ensure → load the .lore/system config subtree → render rules inline, skills
     as an index, persona omitted (v1).
     """
-    from agent_config import (
-        ensure_agent_system_docs,
-        load_agent_system_docs,
-        render_subtree_section,
-    )
+    from agent_config import render_subtree_section
 
     project_id = ctx["project_id"]
     user = ctx["user"]
-
-    # ensure → load. Idempotent (deterministic ids) so repeated init never
-    # duplicates the skeleton.
-    await ensure_agent_system_docs(project_id)
-    docs = await load_agent_system_docs(project_id)
+    scope_root = ctx.get("scope_root") or ""
+    docs = await _config_docs(project_id, scope_root)
 
     rules_text = render_subtree_section(
         "Rules", docs.get("rules_folder"), docs.get("rules_children"),
@@ -279,7 +301,6 @@ async def build_init_package(ctx: dict) -> dict:
     # — True = read-write (every MCP write applies directly), anything else (False,
     # or a None from a migration that did not take) = read-only (mutating tools 403).
     writable = ctx.get("auto_apply") is True
-    scope_root = ctx.get("scope_root") or ""
     scope_info = None
     if scope_root:
         root_doc = await fetch_one("documents", scope_root)

@@ -296,7 +296,7 @@ async def test_append_to_nonempty_doc_with_remote_image_is_rejected(
         "parent_id": doc_id, "node_type": "reference",
         "title": "Filled", "content": "Existing body.\n",
     }))
-    target = created.get("document_id") or created.get("doc_id")
+    target = created["document_id"]
     data = await _call(client, key, "append_to_document", {
         "document_id": target,
         "content": "\n![pic](https://example.invalid/x.png)\n",

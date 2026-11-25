@@ -125,7 +125,7 @@ async def test_fact_with_all_sources_outside_dropped(narrow_corpus):
 
 
 async def _assert_agent_result(result, corpus):
-    hits = {h["doc_id"]: h for h in result["hits"]}
+    hits = {h["document_id"]: h for h in result["hits"]}
     mem = hits.get(corpus["fact_in"])
     assert mem is not None, (
         "no memory hit under the narrow on the agent surface — "

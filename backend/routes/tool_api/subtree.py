@@ -80,15 +80,18 @@ async def tool_export_subtree_md(
     """Export a document's whole subtree as a zip of Markdown files
     (GitHub/Obsidian-compatible layout) and return a short-lived download URL
     — never bytes."""
-    await _gate_export_root(body.root_id, ctx)
+    await _gate_export_root(body.document_id, ctx)
     result = await export_subtree(
-        root_id=body.root_id, project_id=ctx["project_id"],
+        root_id=body.document_id, project_id=ctx["project_id"],
     )
     path, expires_iso = await _stage_export(result)
     base = ctx.get("base_url") or ""
     return {
         "status": "ok",
-        "root_id": result["root_id"],
+        # The exported subtree IS a document: the same name the call took, so an
+        # answer id is the next call's argument (the export service's own
+        # `root_id` result key is internal and stays).
+        "document_id": result["root_id"],
         "documents": result["documents"],
         "files": result["files"],
         "filename": result["filename"],

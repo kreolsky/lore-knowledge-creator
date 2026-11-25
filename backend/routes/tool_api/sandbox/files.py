@@ -71,7 +71,7 @@ async def read_workspace_file(ctx: dict, rel_path: str, *, max_bytes: int) -> by
 async def write_workspace_file(ctx: dict, rel_path: str, data: bytes) -> str:
     """Write bytes to a path under the invoking user's workspace via SFTP.
 
-    The destination is backend-derived (deterministic `{ws}/inbox/{ref_id}/{name}`),
+    The destination is backend-derived (deterministic `{ws}/inbox/{reference_id}/{name}`),
     never agent-supplied — so the realpath layer is not required here (the structural
     check still runs for defense in depth). Returns the absolute workspace path
     written, so the caller can surface it to the agent.

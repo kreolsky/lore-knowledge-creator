@@ -132,7 +132,7 @@ async def _export(client, token: str, root_id: str) -> tuple[dict, bytes]:
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
               "params": {"name": "export_subtree_md",
-                         "arguments": {"root_id": root_id}}},
+                         "arguments": {"document_id": root_id}}},
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
     assert resp.status_code == 200, resp.text
@@ -287,7 +287,7 @@ async def test_export_returns_short_lived_url_and_counts(
     await _seed_doc(test_db, pid, "x-child", "C", "c", root)
     result, _data = await _export(client, rw_key, root)
     assert result["status"] == "ok"
-    assert result["root_id"] == root
+    assert result["document_id"] == root
     assert result["documents"] == 2
     assert result["files"] == 2
     assert result["url"].startswith("http://test/api/mcp/staged/")
@@ -316,7 +316,7 @@ async def test_export_out_of_scope_root_is_403(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
               "params": {"name": "export_subtree_md",
-                         "arguments": {"root_id": outside}}},
+                         "arguments": {"document_id": outside}}},
         headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
     )
     body = resp.json()

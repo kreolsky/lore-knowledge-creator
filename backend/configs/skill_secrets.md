@@ -12,6 +12,12 @@ The user keeps personal API keys in Lore's cabinet (settings). You see each key'
 name, description and bound hosts — never its value; `http_request` injects it
 server-side. Asking the user to paste a key into the chat is always wrong.
 
+A row with `hidden_base_path: true` also carries a hidden start of the address that
+you never see: write the URL as host plus the service's own path,
+`https://host/export/daily`; the server inserts the hidden part. Where a result shows
+`[secret]` in an address, call it with that part left out. Such a row may hold no
+value at all (a webhook): then the call carries the address alone.
+
 ## Flow
 
 1. `list_secrets` — the enabled keys.

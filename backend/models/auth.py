@@ -190,12 +190,17 @@ class ApiKeyResponse(BaseModel):
 
 
 class CreateSecretRequest(BaseModel):
-    """POST /api/cabinet/secrets body — the value is write-only: it exists in
-    the request, the Fernet ciphertext and the tool handler, never in any
-    response. Name/hosts are validated at the route through
-    user_secrets (the contract's single home)."""
+    """POST /api/cabinet/secrets body — the value and the base path are
+    write-only: they exist in the request, the Fernet ciphertext and the tool
+    handler, never in any response. At least one of the two is required
+    (enforced where the row is packed, user_secrets.seal_parts). Name/hosts/
+    base_path are validated at the route through user_secrets (the contract's
+    single home)."""
     name: str
-    value: str = Field(min_length=1, max_length=8192)
+    value: str = Field(default="", max_length=8192)
+    # Same cap as user_secrets.MAX_BASE_PATH — the contract's home is
+    # normalize_base_path; this is the request-shape guard (models are a leaf).
+    base_path: str = Field(default="", max_length=1024)
     description: str = Field(default="", max_length=2000)
     hosts: list[str] = Field(min_length=1, max_length=32)
     header_name: str = "Authorization"
@@ -205,7 +210,10 @@ class CreateSecretRequest(BaseModel):
 
 class UpdateSecretRequest(BaseModel):
     """PATCH /api/cabinet/secrets/{name} body — every field optional; `value`
-    re-enters the key (a PATCH without it keeps the stored ciphertext)."""
+    re-enters the key and `base_path` the hidden path (a PATCH without them
+    keeps the stored ciphertext; one that brings either must carry every
+    secret part the row holds — see INVARIANT(security) in
+    routes/cabinet._secret_update_sets)."""
     value: str | None = Field(default=None, min_length=1, max_length=8192)
     description: str | None = Field(default=None, max_length=2000)
     hosts: list[str] | None = Field(default=None, min_length=1, max_length=32)
@@ -213,6 +221,8 @@ class UpdateSecretRequest(BaseModel):
     header_template: str | None = Field(default=None, max_length=1024)
     # None = keep, '' = clear (back to header mode).
     query_param: str | None = Field(default=None, max_length=64)
+    # None = keep; a value re-enters the path. Removing a path is delete + create.
+    base_path: str | None = Field(default=None, min_length=1, max_length=1024)
     enabled: bool | None = None
 
 

@@ -285,10 +285,10 @@ async def tool_sandbox_fetch_reference(
 
     The reverse of `sandbox_path`: lets an agent feed an already-uploaded image,
     audio file, or .docx to code running in the sandbox. The source path is READ
-    from the reference row (the agent holds only `ref_id` and cannot know the
+    from the reference row (the agent holds only `reference_id` and cannot know the
     stored `safe_name`), and the reference must belong to the acting project.
 
-    Writes to a deterministic path `{ws}/inbox/{ref_id}/{safe_name}` — idempotent,
+    Writes to a deterministic path `{ws}/inbox/{reference_id}/{safe_name}` — idempotent,
     collision-free, a re-fetch overwrites itself. Returns that path so the agent
     can open it by name.
     """
@@ -304,11 +304,11 @@ async def tool_sandbox_fetch_reference(
     from files_service import resolve_reference_file
 
     src, _mime, safe_name = await resolve_reference_file(
-        ref_id=body.ref_id, project_id=ctx["project_id"],
+        ref_id=body.reference_id, project_id=ctx["project_id"],
     )
 
     data = await asyncio.to_thread(src.read_bytes)
-    dest_rel = f"inbox/{body.ref_id}/{safe_name}"
+    dest_rel = f"inbox/{body.reference_id}/{safe_name}"
     try:
         ws_path = await write_workspace_file(ctx, dest_rel, data)
     except Exception as exc:
@@ -319,7 +319,7 @@ async def tool_sandbox_fetch_reference(
     return {
         "status": "applied",
         "path": ws_path,
-        "reference_id": body.ref_id,
+        "reference_id": body.reference_id,
         "filename": safe_name,
     }
 
@@ -371,7 +371,7 @@ async def tool_sandbox_fetch_artifact(
             status_code=502, detail=f"Sandbox unreachable: {exc}",
         ) from exc
 
-    return {"status": "applied", "doc_id": body.document_id, "path": ws_path}
+    return {"status": "applied", "document_id": body.document_id, "path": ws_path}
 
 
 async def _read_replacement_page(ctx: dict, sandbox_path: str) -> str:
@@ -459,7 +459,7 @@ async def tool_replace_artifact_page(
 
     live, _ = await resolve_live_doc_state(body.document_id)
     if live == new_content:
-        return {"status": "applied", "doc_id": body.document_id, "changed": False}
+        return {"status": "applied", "document_id": body.document_id, "changed": False}
 
     # INVARIANT(data-loss): the checkpoint runs BEFORE the write. Why: the
     # replace overwrites the whole body, and the checkpoint is the only route
@@ -473,7 +473,7 @@ async def tool_replace_artifact_page(
         doc_id=body.document_id, new_content=new_content,
         project_id=ctx["project_id"],
     )
-    return {"status": "applied", "doc_id": body.document_id, "changed": True}
+    return {"status": "applied", "document_id": body.document_id, "changed": True}
 
 
 async def _instance_skill_bundle(db, name: str) -> tuple[str, list[tuple[str, str]]] | None:

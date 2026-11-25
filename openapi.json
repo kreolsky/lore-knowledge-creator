@@ -966,8 +966,14 @@
         "type": "object"
       },
       "CreateSecretRequest": {
-        "description": "POST /api/cabinet/secrets body — the value is write-only: it exists in\nthe request, the Fernet ciphertext and the tool handler, never in any\nresponse. Name/hosts are validated at the route through\nuser_secrets (the contract's single home).",
+        "description": "POST /api/cabinet/secrets body — the value and the base path are\nwrite-only: they exist in the request, the Fernet ciphertext and the tool\nhandler, never in any response. At least one of the two is required\n(enforced where the row is packed, user_secrets.seal_parts). Name/hosts/\nbase_path are validated at the route through user_secrets (the contract's\nsingle home).",
         "properties": {
+          "base_path": {
+            "default": "",
+            "maxLength": 1024,
+            "title": "Base Path",
+            "type": "string"
+          },
           "description": {
             "default": "",
             "maxLength": 2000,
@@ -1005,15 +1011,14 @@
             "type": "string"
           },
           "value": {
+            "default": "",
             "maxLength": 8192,
-            "minLength": 1,
             "title": "Value",
             "type": "string"
           }
         },
         "required": [
           "name",
-          "value",
           "hosts"
         ],
         "title": "CreateSecretRequest",
@@ -3560,13 +3565,13 @@
       "ToolExportSubtreeMd": {
         "description": "export_subtree_md body — subtree → staged Markdown zip + signed URL.\n\nNon-mutating by declaration: the call changes no Lore state (the staged\nzip is ephemeral storage swept by TTL), so a read-only key may call it.",
         "properties": {
-          "root_id": {
-            "title": "Root Id",
+          "document_id": {
+            "title": "Document Id",
             "type": "string"
           }
         },
         "required": [
-          "root_id"
+          "document_id"
         ],
         "title": "ToolExportSubtreeMd",
         "type": "object"
@@ -4545,13 +4550,13 @@
       "ToolSandboxFetchReference": {
         "description": "sandbox_fetch_reference body — copy an uploaded reference INTO the workspace.",
         "properties": {
-          "ref_id": {
-            "title": "Ref Id",
+          "reference_id": {
+            "title": "Reference Id",
             "type": "string"
           }
         },
         "required": [
-          "ref_id"
+          "reference_id"
         ],
         "title": "ToolSandboxFetchReference",
         "type": "object"
@@ -5079,8 +5084,21 @@
         "type": "object"
       },
       "UpdateSecretRequest": {
-        "description": "PATCH /api/cabinet/secrets/{name} body — every field optional; `value`\nre-enters the key (a PATCH without it keeps the stored ciphertext).",
+        "description": "PATCH /api/cabinet/secrets/{name} body — every field optional; `value`\nre-enters the key and `base_path` the hidden path (a PATCH without them\nkeeps the stored ciphertext; one that brings either must carry every\nsecret part the row holds — see INVARIANT(security) in\nroutes/cabinet._secret_update_sets).",
         "properties": {
+          "base_path": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Path"
+          },
           "description": {
             "anyOf": [
               {
@@ -8998,7 +9016,7 @@
     },
     "/api/cabinet/secrets": {
       "get": {
-        "description": "The caller's personal keys — metadata and is_set, NEVER the value.",
+        "description": "The caller's personal keys — metadata and the flags is_set /\nhas_base_path, NEVER the value or the base path.",
         "operationId": "list_secrets_api_cabinet_secrets_get",
         "parameters": [
           {
@@ -9041,7 +9059,7 @@
         "summary": "List Secrets"
       },
       "post": {
-        "description": "Store one personal key (encrypted) bound to its hosts.",
+        "description": "Store one personal key (encrypted) bound to its hosts — a value, a\nhidden base path, or both.",
         "operationId": "create_secret_api_cabinet_secrets_post",
         "parameters": [
           {
@@ -9148,7 +9166,7 @@
         "summary": "Delete Secret"
       },
       "patch": {
-        "description": "Update one personal key. A body without `value` keeps the stored\nciphertext (the UI never re-sends it); one with `value` re-enters the key.",
+        "description": "Update one personal key. A body without `value`/`base_path` keeps the\nstored ciphertext (the UI never re-sends them); one that brings either —\nor other hosts — must carry every secret part the row holds\n(INVARIANT(security) in _secret_update_sets).",
         "operationId": "update_secret_api_cabinet_secrets__name__patch",
         "parameters": [
           {
@@ -18318,7 +18336,7 @@
     },
     "/api/tool/generate_image": {
       "post": {
-        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, doc_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.\n\n# see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller\n# is an ai-gated turn (the completion gate), but the tool itself is a\n# cost start and carries its own gate. Principal = ctx[\"user\"]\n# (resolve_key_principal).",
+        "description": "Generate an image via ComfyUI and attach it as an image reference to the\nworking document.\n\nThe agent's `prompt` — a complete, self-contained scene description — is\nrefined server-side into an SD prompt before it reaches ComfyUI.\nDETACHED: this handler is a\nfast LAUNCHER. It validates the doc + target + the count/workflow pairing\n(everything that surfaces a clean HTTP error), mints a run_id, enqueues an\narq task with the admin workflow, size and prompt template, and returns\nat once:\n\n    {status:\"generating\", run_id, document_id}\n\nThe ~10–20s generation runs on the arq DEFAULT queue (NOT a web-process\ntask — the web process is reload-volatile and a create_task dies with an\nunreported CancelledError on any .py edit/deploy/restart). The image lands\nasynchronously on the chat's working document (the session's stable parent)\nand is delivered to the chat as backend-minted `lore/image-gen` frames on\nthe owner-filtered chat channel (bus chat_frame_push → the chat_frame WS\nenvelope); the chips are persisted server-side to messages.gen_steps so a\nreload still shows them (the driver's log never sees the background task).\nThe refined SD prompt is NOT in the result (it would land in the agent's\ncontext) — it travels inside the minted frame and the persisted chip.\n\n# see SYSTEM: capability-tiers — 'ai' gate, defense in depth: the only caller\n# is an ai-gated turn (the completion gate), but the tool itself is a\n# cost start and carries its own gate. Principal = ctx[\"user\"]\n# (resolve_key_principal).",
         "operationId": "tool_generate_image_api_tool_generate_image_post",
         "parameters": [
           {
@@ -19753,7 +19771,7 @@
     },
     "/api/tool/list_secrets": {
       "post": {
-        "description": "The caller's enabled personal keys as {name, description, hosts} — the\nmodel-facing catalog `http_request` spends from. The value is structurally\nabsent: it never leaves the Fernet ciphertext and this domain's dial.",
+        "description": "The caller's enabled personal keys as {name, description, hosts,\nhidden_base_path} — the model-facing catalog `http_request` spends from.\nThe value and the base path are structurally absent: they never leave the\nFernet ciphertext and this domain's dial; the flag only says the model\nmust write its URL without the hidden part.",
         "operationId": "tool_list_secrets_api_tool_list_secrets_post",
         "parameters": [
           {
@@ -21845,7 +21863,7 @@
     },
     "/api/tool/sandbox_fetch_reference": {
       "post": {
-        "description": "Copy an uploaded reference INTO the invoking user's workspace.\n\nThe reverse of `sandbox_path`: lets an agent feed an already-uploaded image,\naudio file, or .docx to code running in the sandbox. The source path is READ\nfrom the reference row (the agent holds only `ref_id` and cannot know the\nstored `safe_name`), and the reference must belong to the acting project.\n\nWrites to a deterministic path `{ws}/inbox/{ref_id}/{safe_name}` — idempotent,\ncollision-free, a re-fetch overwrites itself. Returns that path so the agent\ncan open it by name.",
+        "description": "Copy an uploaded reference INTO the invoking user's workspace.\n\nThe reverse of `sandbox_path`: lets an agent feed an already-uploaded image,\naudio file, or .docx to code running in the sandbox. The source path is READ\nfrom the reference row (the agent holds only `reference_id` and cannot know the\nstored `safe_name`), and the reference must belong to the acting project.\n\nWrites to a deterministic path `{ws}/inbox/{reference_id}/{safe_name}` — idempotent,\ncollision-free, a re-fetch overwrites itself. Returns that path so the agent\ncan open it by name.",
         "operationId": "tool_sandbox_fetch_reference_api_tool_sandbox_fetch_reference_post",
         "parameters": [
           {

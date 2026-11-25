@@ -251,7 +251,7 @@ async def test_index_face_export_create_recall_structure(client, test_db, admin_
         headers=_hdr(key),
     )
     assert resp.status_code == 200, resp.text
-    row = await fetch_one("documents", resp.json()["doc_id"])
+    row = await fetch_one("documents", resp.json()["document_id"])
     assert not row.get("parent_id")
 
     # Recall under the index: a chat anchored at a top-level doc is found;

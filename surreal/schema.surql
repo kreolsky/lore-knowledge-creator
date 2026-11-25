@@ -1278,7 +1278,8 @@ DEFINE INDEX IF NOT EXISTS chat_chunks_embedding_hnsw ON chat_chunks
 -- never by position. frozen_ids ⊆ labelled_ids; labelled_hashes is aligned
 -- to labelled_ids, each the exchange's content-only hash (exchange_hash) —
 -- a changed hash or a missing id drops every topic covering that id, and
--- the row when none is left. Visibility is decided at READ time through
+-- the row when none is left. `version` absent = 1: topics without kind,
+-- outcome and marks, re-labelled by the reconcile. Visibility is decided at READ time through
 -- recall_search.visible_sessions; a row here proves nothing about
 -- visibility.
 DEFINE TABLE IF NOT EXISTS chat_tocs SCHEMAFULL;
@@ -1294,6 +1295,13 @@ DEFINE FIELD IF NOT EXISTS topics[*].title       ON chat_tocs TYPE string;
 DEFINE FIELD IF NOT EXISTS topics[*].synopsis    ON chat_tocs TYPE string;
 DEFINE FIELD IF NOT EXISTS topics[*].message_ids ON chat_tocs TYPE array<string>;
 DEFINE FIELD IF NOT EXISTS topics[*].frozen      ON chat_tocs TYPE bool;
+DEFINE FIELD IF NOT EXISTS topics[*].kind        ON chat_tocs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS topics[*].outcome     ON chat_tocs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS topics[*].marks       ON chat_tocs TYPE option<array<object>>;
+DEFINE FIELD IF NOT EXISTS topics[*].marks[*].about    ON chat_tocs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS topics[*].marks[*].attitude ON chat_tocs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS topics[*].marks[*].quote    ON chat_tocs TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS version       ON chat_tocs TYPE option<int>;
 DEFINE INDEX IF NOT EXISTS idx_chat_tocs_user_project ON chat_tocs FIELDS user_id, project_id;
 
 -- ARCH: the embedded `proposal` (singular) and `proposals` (plural array)
@@ -1440,10 +1448,13 @@ DEFINE INDEX IF NOT EXISTS idx_instance_skills_name ON instance_skills FIELDS na
 
 -- ─── User secrets (SYSTEM: user-secrets) ────────────────────────────────────
 -- A user's personal API keys: name, description, the exact hosts the key is
--- bound to, and the Fernet ciphertext of the value (the key file lives under
--- the storage root, NOT derived from SECRET_KEY — rotating sessions must not
--- brick stored keys). The value is decrypted only inside the http_request
--- tool handler; the REST API is write-only (is_set, never the value).
+-- bound to, and the Fernet ciphertext of the value — alone or packed with a
+-- hidden base path (the packing lives in backend/user_secrets.py
+-- seal_parts/open_parts; no column of its own). The key file lives under the
+-- storage root, NOT derived from SECRET_KEY — rotating sessions must not
+-- brick stored keys. The plaintext is read only by the http_request tool
+-- handler and the MCP key renderer; the REST API is write-only (the flags
+-- is_set and has_base_path, never the value or the path).
 -- The `hosts` binding is the exfiltration guard — see the INVARIANT(security)
 -- on the host check in backend/user_secrets.py.
 DEFINE TABLE IF NOT EXISTS user_secrets SCHEMAFULL;

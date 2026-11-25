@@ -42,6 +42,10 @@ COPY home /app/home
 # extracted to the frontend by conversation/sync-bundle.sh.
 COPY conversation /dsh/lore-conversation
 
+# The plugin's type check against the dsh this image builds: a moved or removed
+# API stops the build (the tests run through tsx, which checks no types).
+RUN node --max-old-space-size=8192 node_modules/typescript/bin/tsc -p lore-driver
+
 # Build-time plugin tests (pure mapping/projection). entries.test.ts gates the reload replay (the live
 # frames and the replayed ones come off the same mapEvent); ws-events.test.ts gates the standing
 # event channel (the /ws/events protocol: same frames, per-session subscribe, auth);

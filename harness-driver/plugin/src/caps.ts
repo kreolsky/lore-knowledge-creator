@@ -134,7 +134,7 @@ function _entryApi(entry: Record<string, unknown>): ModelApi {
 function _entryCompat(entry: Record<string, unknown>): Record<string, unknown> | null {
   const compat = entry.compat
   return compat !== null && typeof compat === 'object' && !Array.isArray(compat)
-    ? compat
+    ? compat as Record<string, unknown>
     : null
 }
 

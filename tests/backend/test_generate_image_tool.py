@@ -466,7 +466,7 @@ async def test_generate_image_happy_path_uses_refined_prompt(
     body = resp.json()
     # Detached: the tool returns at once; the result lands asynchronously.
     assert body["status"] == "generating"
-    assert body["doc_id"] == idx
+    assert body["document_id"] == idx
     assert "sd_prompt" not in body
     assert isinstance(body.get("run_id"), str) and len(body["run_id"]) > 0
 

@@ -2,8 +2,11 @@
 
 The cabinet routes write rows (name, description, bound hosts, header shape,
 Fernet ciphertext); the http_request tool decrypts a row to call one of its
-bound hosts. The plaintext value exists only inside this module's decrypt and
-the tool handler — never in a REST response, a frame or the model context.
+bound hosts. A row's plaintext is the key's value and, optionally, a hidden
+base path the server puts in front of every call's path (`seal_parts`). Both
+exist only inside this module's decrypt and the two readers — the http_request
+handler and the MCP key renderer (backend/mcp_servers.py) — never in a REST
+response, a frame or the model context.
 """
 from __future__ import annotations
 
@@ -63,7 +66,8 @@ def validate_name(name: str) -> str:
 
 
 def normalize_value(value: str) -> str:
-    """Trim a pasted key; refuse what cannot travel in a header.
+    """Trim a pasted key; '' for a key that has none (a base-path-only row);
+    refuse what cannot travel in a header.
 
     # INVARIANT(security): a stored value is printable ASCII, and this refusal
     # never quotes it.
@@ -72,11 +76,51 @@ def normalize_value(value: str) -> str:
     # with a trailing tab would reach the model and the log.
     """
     stripped = value.strip()
-    if not _HEADER_TEXT_RE.fullmatch(stripped):
+    if stripped and not _HEADER_TEXT_RE.fullmatch(stripped):
         raise SecretValidationError(
             "the key must be printable ASCII (it travels in an HTTP header or URL)",
         )
     return stripped
+
+
+# `/`, then segments of URL-unreserved characters plus the sub-delims a path
+# segment may carry — no `%` (so there is no second spelling of a path to
+# scrub), no `?`/`#` (they would end the path), no `;`/`\` (servers cut path
+# parameters at `;` and some treat `\` as `/`), no space.
+_BASE_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._~:@=,+-]+/)*[A-Za-z0-9._~:@=,+-]+/?$")
+MAX_BASE_PATH = 1024
+# Why 16: a shorter prefix is guessable in a handful of calls by a host that
+# answers 404 above it — the length is the secrecy here, the value is chosen
+# by the person.
+MIN_BASE_PATH = 16
+
+
+def normalize_base_path(base_path: str) -> str:
+    """'' (no path) or the hidden path prefix, exactly as the person wrote it
+    (a leading `/`, an optional trailing one).
+
+    # INVARIANT(security): a stored base path is `/`-separated segments with
+    # no `.`/`..` segment and no `%`, and this refusal never quotes it.
+    # Why: the dial puts it in front of the model's own path and the scrub
+    # replaces its exact spellings — a path that could climb (`..`) or that
+    # has a second spelling (`%2F`) would leave the base or reach the model.
+    """
+    path = base_path.strip()
+    if not path:
+        return ""
+    if (
+        not _BASE_PATH_RE.fullmatch(path)
+        or any(seg in (".", "..") for seg in path.split("/"))
+        or len(path.strip("/")) < MIN_BASE_PATH
+    ):
+        raise SecretValidationError(
+            "the base path must start with / and hold only letters, digits and "
+            "._~:@=,+- in its segments, without . or .. segments, at least "
+            f"{MIN_BASE_PATH} characters long",
+        )
+    if len(path) > MAX_BASE_PATH:
+        raise SecretValidationError(f"the base path is over {MAX_BASE_PATH} characters")
+    return path
 
 
 def normalize_header_name(header_name: str) -> str:
@@ -204,15 +248,19 @@ def encrypt_value(plain: str) -> str:
 
 
 def decrypt_value(token: str) -> str | None:
-    """The only plaintext reader outside the tool handler.
+    """The plaintext reader of a ciphertext: through `open_parts` for a
+    personal key row (the value and its base path), directly for an MCP
+    server's shared key (backend/mcp_servers.py).
 
     # INVARIANT(security): a user secret never enters the sandbox, a log line,
-    # a frame, a REST response or the model context.
+    a frame, a REST response or the model context.
     # Why: sandbox_bash returns stdout to the model, so any secret in a
-    # command's env can be printed; the box is one shared unix account with
-    # open internet. The ONLY plaintext reader is the http_request tool
-    # handler, which injects the header directly into the outbound request and
-    # scrubs the value from everything it returns.
+    command's env can be printed; the box is one shared unix account with
+    open internet. The plaintext readers are the http_request tool handler,
+    which injects the header directly into the outbound request and scrubs
+    the value and the base path from everything it returns, and the MCP key
+    renderer, which injects the key into that server's header. The cabinet
+    reads only the flags (`is_set`, `has_base_path`).
 
     Returns None when the row can no longer be decrypted (key file lost in a
     restore) — that state is served as "not set / re-enter key", never as an
@@ -222,6 +270,38 @@ def decrypt_value(token: str) -> str | None:
         return _fernet().decrypt(token.encode()).decode()
     except (InvalidToken, TypeError):
         return None
+
+
+def seal_parts(value: str, base_path: str) -> str:
+    """The packed plaintext behind a personal key row's ciphertext.
+
+    # INVARIANT(persisted): the plaintext is the value alone, or the value, a
+    # newline, then the base path — never both empty; only this and `open_parts` know it.
+    # Why: a stored value is printable ASCII with no newline (normalize_value),
+    # so the first newline can only be the separator, and a row written before
+    # the path existed reads as "no path" with no migration. A row with
+    # neither part would send no credential and dial the host's root.
+    """
+    if not value and not base_path:
+        raise SecretValidationError("enter a key or a base path")
+    return f"{value}\n{base_path}" if base_path else value
+
+
+def open_parts(ciphertext: str) -> tuple[str, str] | None:
+    """(value, base_path) of a personal key row; None when it no longer
+    decrypts. `base_path` is '' for a row without one."""
+    plain = decrypt_value(ciphertext)
+    if plain is None:
+        return None
+    value, _, base_path = plain.partition("\n")
+    return value, base_path
+
+
+def has_base_path(row: dict) -> bool:
+    """Does the row hold a hidden base path? False for an undecryptable row —
+    its parts are unknown and the dial refuses it anyway (409)."""
+    parts = open_parts(row.get("ciphertext") or "")
+    return bool(parts and parts[1])
 
 
 def is_set(ciphertext: str | None) -> bool:
@@ -248,7 +328,9 @@ async def list_rows(db: AsyncSurreal, user_id: str) -> list[dict]:
 
 
 def public_view(row: dict) -> dict:
-    """The REST projection — every field EXCEPT the value/ciphertext."""
+    """The REST projection — every field EXCEPT the value, the base path and
+    the ciphertext (flags only: `is_set`, `has_base_path`)."""
+    parts = open_parts(row.get("ciphertext") or "")
     return {
         "name": row.get("name"),
         "description": row.get("description") or "",
@@ -257,7 +339,8 @@ def public_view(row: dict) -> dict:
         "header_template": row.get("header_template") or DEFAULT_HEADER_TEMPLATE,
         "query_param": row.get("query_param") or "",
         "enabled": bool(row.get("enabled")),
-        "is_set": is_set(row.get("ciphertext")),
+        "is_set": parts is not None,
+        "has_base_path": bool(parts and parts[1]),
         "updated_at": row.get("updated_at"),
     }
 
@@ -272,13 +355,15 @@ async def create_row(
     header_name: str = DEFAULT_HEADER_NAME,
     header_template: str = DEFAULT_HEADER_TEMPLATE,
     query_param: str = "",
+    base_path: str = "",
 ) -> dict | None:
-    """Insert one row; None when the (user_id, name) UNIQUE index rejects it."""
+    """Insert one row; None when the (user_id, name) UNIQUE index rejects it.
+    `base_path` is LAST and passed by name — tests call the rest positionally."""
     data = {
         "user_id": user_id,
         "name": name,
         "description": description,
-        "ciphertext": encrypt_value(value),
+        "ciphertext": encrypt_value(seal_parts(value, base_path)),
         "hosts": hosts,
         "header_name": header_name,
         "header_template": header_template,
@@ -313,7 +398,8 @@ async def get_row(db: AsyncSurreal, user_id: str, name: str) -> dict | None:
 
 async def update_row(db: AsyncSurreal, row_id: str, sets: dict) -> None:
     """Apply validated field updates. Keys are the route's fixed column names;
-    a `ciphertext` key only ever carries a fresh encrypt_value() result."""
+    a `ciphertext` key only ever carries a fresh `encrypt_value(seal_parts(…))`
+    result."""
     if not sets:
         return
     pairs = ", ".join(f"{k} = ${k}" for k in sets)

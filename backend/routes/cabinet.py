@@ -274,25 +274,58 @@ async def unlock_document(
 
 # ─── Personal secrets (SYSTEM: user-secrets, backend/user_secrets.py) ───────
 # A user's personal API keys: name, description, the hosts the key is bound
-# to, and the encrypted value. Only these routes (a cookie session —
-# get_current_user decodes the JWT cookie and nothing else) write a row; no
-# tool ever can.
+# to, and the encrypted value — alone or packed with a hidden base path. Only
+# these routes (a cookie session — get_current_user decodes the JWT cookie
+# and nothing else) write a row; no tool ever can.
+
+
+def _resealed_plaintext(row: dict, body: UpdateSecretRequest) -> str:
+    """The packed plaintext of a PATCH that brings a secret part: every part
+    the row holds is re-entered (the INVARIANT in _secret_update_sets), and a
+    blank one counts as absent. An undecryptable row holds nothing readable,
+    so any part may be entered — and seal_parts refuses a row left with none."""
+    held_value, held_path = user_secrets.open_parts(row.get("ciphertext") or "") or ("", "")
+    value = user_secrets.normalize_value(body.value or "")
+    base_path = user_secrets.normalize_base_path(body.base_path or "")
+    missing = [
+        label for held, brought, label in (
+            (held_value, value, "key"),
+            (held_path, base_path, "base path"),
+        ) if held and not brought
+    ]
+    if missing:
+        raise user_secrets.SecretValidationError(
+            f"enter the {' and the '.join(missing)} again",
+        )
+    return user_secrets.seal_parts(value, base_path)
+
 
 def _secret_update_sets(row: dict, body: UpdateSecretRequest) -> dict:
     """The validated column updates of one PATCH.
 
-    # INVARIANT(security): moving a key to another host requires entering the
-    # key again.
+    # INVARIANT(security): a PATCH that brings a value, a base path or other
+    # hosts carries EVERY secret part the row holds — otherwise 422, nothing changes.
     # Why: a stolen session must not be able to rebind a stored key to its own
-    # server and spend it through the agent without ever knowing the value.
+    server and spend it through the agent without ever knowing the value, nor
+    dial a part it does not know at a host of its choosing; and a forgotten
+    field would save a key without its other part — the key would go to the
+    host's root. Description, header fields and `enabled` need no secret.
     """
     sets: dict = {}
-    if body.hosts is not None:
-        sets["hosts"] = user_secrets.validate_hosts(body.hosts)
-        if body.value is None and user_secrets.hosts_changed(row, sets["hosts"]):
-            raise user_secrets.SecretValidationError(
-                "enter the key again to change its hosts",
-            )
+    hosts = user_secrets.validate_hosts(body.hosts) if body.hosts is not None else None
+    if body.base_path is not None and row.get("server_id"):
+        # WHY: this route reaches MCP key rows by name, and the renderer
+        # (backend/mcp_servers.py) would put the packed plaintext into that
+        # server's header.
+        raise user_secrets.SecretValidationError("an MCP server key cannot have a base path")
+    if (
+        body.value is not None
+        or body.base_path is not None
+        or (hosts is not None and user_secrets.hosts_changed(row, hosts))
+    ):
+        sets["ciphertext"] = user_secrets.encrypt_value(_resealed_plaintext(row, body))
+    if hosts is not None:
+        sets["hosts"] = hosts
     if body.description is not None:
         sets["description"] = body.description
     if body.header_name is not None:
@@ -303,10 +336,6 @@ def _secret_update_sets(row: dict, body: UpdateSecretRequest) -> dict:
         sets["query_param"] = user_secrets.normalize_query_param(body.query_param)
     if body.enabled is not None:
         sets["enabled"] = body.enabled
-    if body.value is not None:
-        sets["ciphertext"] = user_secrets.encrypt_value(
-            user_secrets.normalize_value(body.value),
-        )
     return sets
 
 
@@ -315,14 +344,15 @@ async def list_secrets(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """The caller's personal keys — metadata and is_set, NEVER the value.
+    """The caller's personal keys — metadata and the flags is_set /
+    has_base_path, NEVER the value or the base path.
 
     # INVARIANT(security): a user secret never enters a REST response.
     # Why: every response is model-visible (chat frames relay tool/REST
     # payloads) or attacker-visible (a leaked session reads the cabinet); the
-    # value lives only in the Fernet ciphertext and the http_request handler.
-    # An undecryptable row (key file lost in a restore) counts as not set —
-    # the UI shows "re-enter key", never an empty secret.
+    # value and the base path live only in the Fernet ciphertext and the
+    # http_request handler. An undecryptable row (key file lost in a restore)
+    # counts as not set — the UI shows "re-enter key", never an empty secret.
     """
     rows = await user_secrets.list_rows(db, user["user_id"])
     return {"secrets": [user_secrets.public_view(r) for r in rows]}
@@ -334,8 +364,10 @@ async def create_secret(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Store one personal key (encrypted) bound to its hosts."""
+    """Store one personal key (encrypted) bound to its hosts — a value, a
+    hidden base path, or both."""
     try:
+        base_path = user_secrets.normalize_base_path(body.base_path)
         fields = (
             user_secrets.validate_name(body.name),
             user_secrets.normalize_value(body.value),
@@ -345,9 +377,11 @@ async def create_secret(
             user_secrets.normalize_header_template(body.header_template),
             user_secrets.normalize_query_param(body.query_param),
         )
+        row = await user_secrets.create_row(
+            db, user["user_id"], *fields, base_path=base_path,
+        )
     except user_secrets.SecretValidationError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    row = await user_secrets.create_row(db, user["user_id"], *fields)
     if row is None:
         raise HTTPException(status_code=409, detail="A secret with this name already exists")
     log_security("user_secret_created", user_id=user["user_id"])
@@ -361,8 +395,10 @@ async def update_secret(
     user: dict = Depends(get_current_user),
     db: AsyncSurreal = Depends(get_db),
 ):
-    """Update one personal key. A body without `value` keeps the stored
-    ciphertext (the UI never re-sends it); one with `value` re-enters the key."""
+    """Update one personal key. A body without `value`/`base_path` keeps the
+    stored ciphertext (the UI never re-sends them); one that brings either —
+    or other hosts — must carry every secret part the row holds
+    (INVARIANT(security) in _secret_update_sets)."""
     row = await user_secrets.get_row(db, user["user_id"], name)
     if not row:
         raise HTTPException(status_code=404, detail="Secret not found")

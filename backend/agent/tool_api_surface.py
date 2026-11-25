@@ -109,8 +109,8 @@ async def apply_edits_to_document(
     fix just that one.
 
     Returns:
-      {status:"applied", doc_id, applied:<n>, skipped:[{index, at_cp, reason}], checkpoint:<bool>}
-      All-skipped → {status:"applied", noop:true, doc_id, applied:0, skipped:[…], checkpoint:false}
+      {status:"applied", document_id, applied:<n>, skipped:[{index, at_cp, reason}], checkpoint:<bool>}
+      All-skipped → {status:"applied", noop:true, document_id, applied:0, skipped:[…], checkpoint:false}
     """
     if not edits:
         raise HTTPException(status_code=400, detail="No edits supplied")
@@ -181,7 +181,7 @@ async def apply_edits_to_document(
             raise _steer_html_full_rewrite(exc) if is_artifact else exc
     # Best-effort presence: tell live editors the agent edited this doc.
     await broadcast_agent_presence(doc_id, user.get("user_id"))
-    return {"status": "applied", "doc_id": doc_id, **result}
+    return {"status": "applied", "document_id": doc_id, **result}
 
 
 def _steer_html_full_rewrite(exc: HTTPException) -> HTTPException:

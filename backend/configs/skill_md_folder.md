@@ -12,7 +12,7 @@ tools:
 
 ## Export
 
-`export_subtree_md(root_id=<document>)` exports that document with everything under it.
+`export_subtree_md(document_id=<document>)` exports that document with everything under it.
 Give the user the returned link as is — it expires soon, so do not save it into a
 document. Tell them what the zip leaves out: comments, history, the manual order of
 documents (files are alphabetical), and links to documents outside the exported tree.
@@ -25,7 +25,7 @@ there first:
 - **By link** (a GitHub repository, a published archive) — download it with
   `sandbox_bash` (for GitHub: `https://github.com/<owner>/<repo>/archive/refs/heads/<branch>.zip`).
   Keep only the folder the user asked for: unpack, then zip that folder alone.
-- **A .zip already in the project as a file** — `sandbox_fetch_reference(ref_id=…)`.
+- **A .zip already in the project as a file** — `sandbox_fetch_reference(reference_id=…)`.
 
 Before zipping, clean the folder, or the whole import is refused: drop `.svg` files and
 remove image links to remote URLs (`![…](https://…)`) — only local raster images

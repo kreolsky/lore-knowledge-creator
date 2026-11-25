@@ -111,6 +111,29 @@ def _is_block_line(line: str) -> bool:
     return bool(_BLOCK_LINE.match(line.strip())) if line.strip() else False
 
 
+def _marker(line: str) -> str:
+    """The block marker `line` opens with, ordered numbers unified; "" for prose."""
+    match = _BLOCK_LINE.match(line.strip())
+    return re.sub(r"\d+", "1", match.group()) if match else ""
+
+
+def _edits_inside_line(before: str, old_line: str, new_line: str, *, one_line: bool) -> bool:
+    """True when `new_line` edits a part of the line it stands in, opening no new block.
+
+    `before` is the document's text between the start of that line and `old_line`.
+
+    # WHY: a block marker in the replaced text proves nothing by itself — mid-sentence
+    # `- Нет, не так.` is prose with a dash, and a heading put in its place must leave the
+    # sentence. The marker is the line's own at the line's start (behind a quote's `> `);
+    # in a table row every edge is a cell; mid-line only the SAME marker on ONE line is the
+    # same prose (or cell, or nested item) reworded.
+    """
+    lead = before.lstrip(" \t>")
+    if not lead:
+        return bool(_marker(old_line))
+    return lead.startswith("|") or (one_line and _marker(new_line) == _marker(old_line))
+
+
 def align_block_boundaries(
     content: str,
     from_cp: int,
@@ -133,16 +156,27 @@ def align_block_boundaries(
     # not. This is the projection over that class, NOT a per-construct patch.
     # A boundary that already exists (any newline) is left untouched — never
     # reformat deliberately-shaped content.
+    # WHY: an edge is aligned only when the edit INTRODUCES the block there. Padding
+    # an edit inside a line tears the rest of a list item, table row or quote off it.
     """
     lines = new_text.split("\n")
-    if _is_block_line(lines[0]):
+    old_lines = content[from_cp:to_cp].split("\n")
+    before = content[content.rfind("\n", 0, from_cp) + 1:from_cp]
+    one_line = len(lines) == 1
+    opens = _is_block_line(lines[0]) and not _edits_inside_line(
+        before, old_lines[0], lines[0], one_line=one_line,
+    )
+    closes = _is_block_line(lines[-1]) and not _edits_inside_line(
+        before if len(old_lines) == 1 else "", old_lines[-1], lines[-1], one_line=one_line,
+    )
+    # WHY: behind a quote's `> ` the edge is a line start already — the block opens inside it.
+    if opens and before.strip(" \t>"):
         start = from_cp
-        while start > 0 and content[start - 1] in " \t":
+        while content[start - 1] in " \t":
             start -= 1
-        if start > 0 and content[start - 1] != "\n":
-            from_cp = start
-            new_text = "\n\n" + new_text
-    if _is_block_line(lines[-1]):
+        from_cp = start
+        new_text = "\n\n" + new_text
+    if closes:
         end = to_cp
         while end < len(content) and content[end] in " \t":
             end += 1

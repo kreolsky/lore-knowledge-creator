@@ -24,6 +24,7 @@ async def save_toc(db, chat: dict, user_id: str, project_id: str, model: str,
             "frozen_ids": toc["frozen_ids"], "labelled_ids": toc["labelled_ids"],
             "labelled_hashes": [hashes[m] for m in toc["labelled_ids"]],
             "topics": toc["topics"],
+            "version": toc.get("version") or 1,
         }},
     )
 
@@ -59,7 +60,8 @@ def seed_toc(source: dict, origins: dict[str, str], exchanges: list[dict]) -> di
     frozen = {mapped[m]["id"] for m in source.get("frozen_ids") or [] if m in mapped}
     return {"topics": topics, "labelled_ids": ids,
             "labelled_hashes": [by_id[m]["hash"] for m in ids],
-            "frozen_ids": [m for m in ids if m in frozen], "model": source.get("model")}
+            "frozen_ids": [m for m in ids if m in frozen], "model": source.get("model"),
+            "version": source.get("version") or 1}
 
 
 async def seed_branch_tocs(db, user_id: str, project_id: str, chats: list[dict]) -> int:
@@ -80,7 +82,7 @@ async def seed_branch_tocs(db, user_id: str, project_id: str, chats: list[dict])
     # WHY the user filter on the source too: a toc is its owner's labelling;
     # a branch is only ever seeded from a toc of the same user.
     sources = {t["chat_id"]: t for t in await db.query(
-        "SELECT chat_id, labelled_ids, labelled_hashes, frozen_ids, topics, model FROM chat_tocs "
+        "SELECT chat_id, labelled_ids, labelled_hashes, frozen_ids, topics, model, version FROM chat_tocs "
         "WHERE user_id = $uid AND project_id = $pid AND chat_id IN $ids",
         {**params, "ids": sorted({c["forked_from"] for c in forks.values()})},
     ) or []}

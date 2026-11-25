@@ -581,16 +581,14 @@ async def _classify_http_post(url: str, headers: dict[str, str]) -> dict | None:
     # Why: the headers carry the caller's key, and a shared client keeps a
     # cookie jar and a keep-alive pool keyed across exchanges — the exact
     # contract of http_clients.isolated_client.
-    client = http_clients.isolated_client(timeout=_CHECK_TIMEOUT_S)
     try:
-        resp = await client.post(
-            url, json=init,
-            headers={"Accept": "application/json, text/event-stream", **headers},
-        )
+        async with http_clients.isolated_client(timeout=_CHECK_TIMEOUT_S) as client:
+            resp = await client.post(
+                url, json=init,
+                headers={"Accept": "application/json, text/event-stream", **headers},
+            )
     except httpx.HTTPError:
         return {"status": "unreachable", "tools": None, "detail": None}
-    finally:
-        await client.aclose()
     if 200 <= resp.status_code < 300:
         return None
     if resp.status_code in (401, 403):

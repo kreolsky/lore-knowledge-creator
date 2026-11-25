@@ -5,11 +5,10 @@
  *   served by the Python backend; this module registers THIN proxies from the
  *   turn payload's `tools` (OpenAI fn schemas) onto the harness tool registry.
  *   Access checks live in Python and are never re-implemented here — the proxy
- *   knows tool names and shapes, never permissions (ecosystem-v3: the seam is
- *   deliberate and load-bearing).
+ *   knows tool names and shapes, never permissions (the seam is deliberate and
+ *   load-bearing).
  *
- * # ARCH: the mid-turn
- *   approval ask lives HERE. A confirm-mode mutating POST the backend refuses
+ * # ARCH: the mid-turn approval ask lives HERE. A confirm-mode mutating POST the backend refuses
  *   with 409 {code: confirmation_required} is retried after dsh's approval
  *   service asks the user (approvals.ts bridges the verdict); an approval
  *   re-POSTs with `apply: auto` + the X-Agent-Verdict marker, a rejection
@@ -40,6 +39,7 @@ import http from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
 
 import { askLoreApproval } from './approvals.ts'
 import { childSessions, rootOf } from './ws-events.ts'
@@ -133,7 +133,7 @@ export interface ImageResultValue {
 /** The output contract for the two shapes execute can settle on: the meta +
  * attachment reference on success, or the envelope's own text (errors,
  * `unavailable`, a non-vision model) — which render turns into one text block. */
-const IMAGE_RESULT_OUTPUT_SCHEMA = {
+const IMAGE_RESULT_OUTPUT_SCHEMA: JsonSchemaNode = {
   oneOf: [
     { type: 'string' },
     {
@@ -146,7 +146,7 @@ const IMAGE_RESULT_OUTPUT_SCHEMA = {
       required: ['meta', 'image'],
     },
   ],
-} as const
+}
 
 /** The settled value as content: the meta as ONE JSON text block (the model
  * reads it; the person's plate parses the same object for the thumbnail) plus

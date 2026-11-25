@@ -169,7 +169,7 @@ async def _upsert_head(
             title=name, content=content, parent_id=folder_id,
             project_id=project_id, user=user, scope_root=ctx.get("scope_root"),
         )
-        return created["doc_id"]
+        return created["document_id"]
     from agent.doc_state import route_document_content
     from documents.service import rename_document
 
@@ -228,7 +228,7 @@ async def _upsert_titled_child(
             project_id=ctx["project_id"], user=ctx["user"],
             scope_root=ctx.get("scope_root"),
         )
-        return created["doc_id"]
+        return created["document_id"]
     from agent.doc_state import route_document_content
 
     await route_document_content(
@@ -324,6 +324,6 @@ async def _upsert_children(
         for path, text in files
     }
     return {
-        "status": "applied", "doc_id": head_id,
+        "status": "applied", "document_id": head_id,
         "spec_doc_id": spec_id, "name": name, "files": file_ids,
     }

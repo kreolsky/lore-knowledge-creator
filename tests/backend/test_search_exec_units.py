@@ -19,7 +19,7 @@ from agent.search_exec import (
 
 
 def _hit(doc_id: str, **extra) -> dict:
-    return {"doc_id": doc_id, **extra}
+    return {"document_id": doc_id, **extra}
 
 
 def test_rrf_order_is_the_only_ranking_signal():
@@ -28,7 +28,7 @@ def test_rrf_order_is_the_only_ranking_signal():
     hit restates or contradicts its position."""
     direct, semantic = [_hit("x"), _hit("y")], [_hit("y"), _hit("z")]
     fused = _rrf_merge(direct, semantic)
-    assert [h["doc_id"] for h in fused] == ["y", "x", "z"]
+    assert [h["document_id"] for h in fused] == ["y", "x", "z"]
 
 
 def test_hit_builders_emit_no_score():

@@ -108,7 +108,7 @@ async def test_read_document_name_alias_dispatches_and_counts(
     data = await _mcp_call(client, agent_tok, "read_document",
                            {"document_id": "", "name": doc_id})
     assert not _is_error(data), data
-    assert _result_text(data)["doc_id"] == doc_id
+    assert _result_text(data)["document_id"] == doc_id
     assert hits.get("read_document.name_alias") == 1
 
 

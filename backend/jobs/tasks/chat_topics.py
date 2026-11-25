@@ -14,16 +14,17 @@
 # call posts its own continuation; any other run leaves the rest to the next
 # trigger or the hourly sweep. A chat is labelled when its unlabelled tail
 # reaches CHAT_TOPICS_CLOSE_EVERY exchanges, or holds any and has been idle
-# CHAT_TOPICS_IDLE_MIN; the window is the next CHAT_TOPICS_WINDOW unfrozen
-# exchanges, a full window freezes, a partial one only labels. The model is the
-# one the chat ran on. The prompt and the exchange rendering are the bench's
-# chunk-v2 exactly as measured (scripts/chat-topics-bench/bench.py) — editing
+# CHAT_TOPICS_IDLE_MIN; the window is the next unfrozen exchanges up to a count
+# and a size (next_window), a full window freezes, a partial one only labels. A
+# toc of an older TOC_VERSION is re-labelled whole, after every due tail, and
+# stays readable until its replacement is complete. The model is the one the
+# chat ran on. The prompt and the exchange rendering are the bench's
+# chunk-v4 exactly as measured (scripts/chat-topics-bench/bench.py) — editing
 # either un-measures the labeller.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -52,12 +53,21 @@ from pipeline.extractor.utils import LLMHTTPError, call_llm_text
 from token_usage import UsageActor, usage_actor
 
 from db import get_db
+from jobs.tasks.chat_topics_answer import (
+    CHAT_TOPICS_WINDOW,
+    TOC_VERSION,
+    merge_window,
+    next_window,
+    own_words,
+    parse_topics,
+    render_exchange,
+    window_count,
+)
 from jobs.tasks.chat_topics_seed import save_toc, seed_branch_tocs
 
 logger = logging.getLogger(__name__)
 
 CHAT_TOPICS_CLOSE_EVERY = 12
-CHAT_TOPICS_WINDOW = 60
 CHAT_TOPICS_FREEZE_IDLE = timedelta(hours=24)
 # Model calls per pair run; a cold backfill drains over the run's own
 # continuations, one budget a minute, instead of one burst.
@@ -66,7 +76,7 @@ CHAT_TOPICS_RUN_CALLS = 6
 # shared across them); past it, the hourly sweep takes over.
 CHAT_TOPICS_RERUNS = 3
 # The bench's rendering limits and answer budget (bench.py run_chunk).
-USER_CLIP, ASSISTANT_CLIP, ANSWER_MAX_TOKENS = 350, 150, 4000
+USER_CLIP, ASSISTANT_CLIP, ANSWER_MAX_TOKENS = 1500, 400, 8000
 
 _PROMPT = (Path(__file__).resolve().parents[2] / "configs" / "chat_topics_prompt.md"
            ).read_text(encoding="utf-8").rstrip("\n") + "\n\n"
@@ -204,8 +214,10 @@ def exchange_hash(ex: dict) -> str:
 
 
 async def chat_exchanges(db, chat_id: str) -> list[dict]:
-    """The chat's exchanges in order with their text — `{id, hash, user, asst}`,
-    texts rendered as the bench clips them (group_exchanges' grouping)."""
+    """The chat's exchanges in order with their text — `{id, hash, user, asst,
+    said}`: the texts rendered as the bench clips them (group_exchanges'
+    grouping), `said` the whole user message as own_words, what a mark's quote
+    is checked against."""
     rows = await db.query(
         "SELECT meta::id(id) AS id, role, content, created_at FROM messages "
         "WHERE chat_id = $cid AND deleted_at IS NONE",
@@ -218,86 +230,27 @@ async def chat_exchanges(db, chat_id: str) -> list[dict]:
     return [{"id": ex["id"], "hash": ex["hash"],
              "user": clip(ex["user"].get("content") or "", USER_CLIP),
              "asst": clip("\n".join(a["content"] for a in ex["answers"] if a.get("content")),
-                          ASSISTANT_CLIP)}
+                          ASSISTANT_CLIP),
+             "said": own_words(ex["user"].get("content") or "")}
             for ex in exchanges]
-
-
-def parse_topics(text: str, ids: list[str]) -> list[dict]:
-    """The answer's topics over the window `ids` as `{title, synopsis, message_ids}`.
-
-    The bench's parse: <think> stripped, the first `[...]` read as JSON; turns
-    outside the window dropped, an equal title merged, an exchange no topic
-    covers inherits the previous exchange's topics (the first: the next
-    covered one's). No usable topic ⇒ [] (the caller logs a failure)."""
-    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
-    match = re.search(r"\[.*\]", text, re.S)
-    try:
-        items = json.loads(match.group(0)) if match else []
-    except json.JSONDecodeError:
-        items = []
-    topics: dict[str, dict] = {}
-    owners: list[list[str]] = [[] for _ in ids]
-    for item in items if isinstance(items, list) else []:
-        title = item.get("title") if isinstance(item, dict) else None
-        if not isinstance(title, str) or not title.strip():
-            continue
-        title = title.strip()
-        topics.setdefault(title, {"title": title, "synopsis": str(item.get("synopsis") or "").strip()})
-        for n in item.get("turns") or []:
-            if isinstance(n, int) and not isinstance(n, bool) and 0 <= n < len(ids) \
-                    and title not in owners[n]:
-                owners[n].append(title)
-    covered = [k for k, o in enumerate(owners) if o]
-    if not covered:
-        return []
-    for k in range(len(owners)):
-        if not owners[k]:
-            owners[k] = owners[k - 1] if k else owners[covered[0]]
-    for t in topics.values():
-        t["message_ids"] = [ids[k] for k, o in enumerate(owners) if t["title"] in o]
-    return [t for t in topics.values() if t["message_ids"]]
 
 
 # ─── one chat ────────────────────────────────────────────────────────────────
 
 
-def merge_window(toc: dict, order: list[str], window: list[str],
-                 found: list[dict], freeze: bool) -> dict:
-    """The toc after labelling `window`: earlier topics keep only their frozen
-    exchanges, a found topic whose title equals an earlier one joins it, and a
-    freezing window adds its exchanges to frozen_ids. `order` = every exchange id."""
-    frozen = set(toc["frozen_ids"]) | (set(window) if freeze else set())
-    kept = [{**t, "message_ids": [m for m in t["message_ids"] if m in toc["frozen_ids"]]}
-            for t in toc["topics"]]
-    by_title = {t["title"]: t for t in kept if t["message_ids"]}
-    for t in found:
-        same = by_title.get(t["title"])
-        if same:
-            same["message_ids"] = list(dict.fromkeys(same["message_ids"] + t["message_ids"]))
-        else:
-            by_title[t["title"]] = dict(t)
-    labelled = frozen | set(window)
-    pos = {m: k for k, m in enumerate(order)}
-    topics = sorted(by_title.values(), key=lambda t: min(pos.get(m, 0) for m in t["message_ids"]))
-    for t in topics:
-        t["message_ids"].sort(key=lambda m: pos.get(m, 0))
-        t["frozen"] = all(m in frozen for m in t["message_ids"])
-    return {**toc, "topics": topics,
-            "frozen_ids": [m for m in order if m in frozen],
-            "labelled_ids": [m for m in order if m in labelled]}
-
-
 async def _ask(model: str, window: list[dict], earlier: list[str]) -> list[dict]:
     """One labelling call over `window`; raises when the answer holds no topic."""
-    body = "\n".join(f"{n}. Пользователь: {e['user']}\n   Ассистент: {e['asst']}"
-                     for n, e in enumerate(window))
+    body = "\n".join(render_exchange(n, e) for n, e in enumerate(window))
     stitch = _STITCH.format(titles=", ".join(f"«{t}»" for t in earlier)) if earlier else ""
     async with _llm_slot:
         text = await call_llm_text(_PROMPT + stitch + body, model=model,
                                    max_tokens=ANSWER_MAX_TOKENS)
-    found = parse_topics(text, [e["id"] for e in window])
+    found, returned, kept = parse_topics(text, window)
     if not found:
         raise ValueError(f"no parseable topic array in the answer: {text[:300]!r}")
+    if returned > kept:
+        logger.info("chat topics: %d of %d marks dropped — malformed, unverified quote or over the cap",
+                    returned - kept, returned)
     return found
 
 
@@ -357,7 +310,7 @@ async def verify_tocs(db, user_id: str, project_id: str,
     # (visible_sessions, the session guard, the shared branch pick), and a persona switched
     # back on continues the thread at once, without re-labelling.
     rows = await db.query(
-        "SELECT chat_id, labelled_ids, labelled_hashes, frozen_ids, topics, model FROM chat_tocs "
+        "SELECT chat_id, labelled_ids, labelled_hashes, frozen_ids, topics, model, version FROM chat_tocs "
         "WHERE user_id = $uid AND project_id = $pid AND chat_id IN $ids",
         {"uid": user_id, "pid": project_id, "ids": sorted(exchanges)},
     ) or []
@@ -381,7 +334,9 @@ async def verify_tocs(db, user_id: str, project_id: str,
 def label_due(chat: dict, toc: dict | None, now: datetime) -> str | None:
     """What a pass owes the chat, from its light exchanges and verified toc:
     "call" (the tail is due), "freeze" (a day idle, tail labelled, unfrozen
-    exchanges left — no call), or None."""
+    exchanges left — no call), "relabel" (a toc of an older TOC_VERSION, no tail
+    waiting), or None. A stale toc with a due tail is "call": label_chat
+    re-labels it whole."""
     order = [e["id"] for e in chat["exchanges"]]
     labelled = set((toc or {}).get("labelled_ids") or [])
     tail = [m for m in order if m not in labelled]
@@ -389,18 +344,25 @@ def label_due(chat: dict, toc: dict | None, now: datetime) -> str | None:
     if tail:
         due = len(tail) >= CHAT_TOPICS_CLOSE_EVERY or idle >= timedelta(minutes=CHAT_TOPICS_IDLE_MIN)
         return "call" if due else None
+    if toc and (toc.get("version") or 1) < TOC_VERSION:
+        return "relabel"
     if toc and toc.get("model") is not None and idle >= CHAT_TOPICS_FREEZE_IDLE \
             and len(order) > len(toc.get("frozen_ids") or []):
         return "freeze"
     return None
 
 
+def _fresh_toc() -> dict:
+    return {"frozen_ids": [], "labelled_ids": [], "topics": [], "labelled_hashes": [],
+            "model": None, "version": TOC_VERSION}
+
+
 async def _load_toc(db, chat: dict, exchanges: list[dict]) -> dict:
     """The chat's stored toc pruned to the chat's current exchanges
     (prune_toc, the change written), or a fresh one when none is left."""
-    fresh = {"frozen_ids": [], "labelled_ids": [], "topics": [], "labelled_hashes": [], "model": None}
+    fresh = _fresh_toc()
     rows = await db.query(
-        "SELECT frozen_ids, labelled_ids, topics, labelled_hashes, model "
+        "SELECT frozen_ids, labelled_ids, topics, labelled_hashes, model, version "
         "FROM type::record('chat_tocs', $cid)", {"cid": chat["sid"]},
     ) or []
     if not rows:
@@ -412,7 +374,7 @@ async def _load_toc(db, chat: dict, exchanges: list[dict]) -> dict:
     pruned = prune_toc(toc, exchanges)
     if pruned is not toc:
         await _store_pruned(db, chat["sid"], pruned)
-    return {**fresh, **pruned} if pruned is not None else fresh
+    return {**fresh, **pruned, "version": pruned.get("version") or 1} if pruned is not None else fresh
 
 
 async def _labeller_model(db, chat: dict, user_id: str, model: str) -> str | None:
@@ -459,80 +421,134 @@ def _router_refused(exc: Exception) -> bool:
         code in exc.body for code in ("model_not_allowed", "model_not_found"))
 
 
-async def label_chat(db, chat: dict, user_id: str, project_id: str, calls_left: int,
-                     model: str | None) -> tuple[int, int, bool, str | None]:
+def new_run() -> dict:
+    """One task run's shared counters: model calls, tocs saved, a call failed, a
+    re-label that did not fit the calls left, the models the router refused."""
+    return {"calls": 0, "saved": 0, "failed": False, "deferred": False, "refused": set()}
+
+
+async def _label_window(run: dict, chat: dict, toc: dict, exchanges: list[dict],
+                        model: str) -> dict | None:
+    """The toc after one call over its next unfrozen window, not saved; None when
+    the call failed or the router refused the model (recorded in `run`)."""
+    rest = [e for e in exchanges if e["id"] not in toc["frozen_ids"]]
+    window = next_window(rest)
+    earlier = [t["title"] for t in toc["topics"] if any(m in toc["frozen_ids"] for m in t["message_ids"])]
+    run["calls"] += 1
+    try:
+        found = await _ask(model, window, earlier)
+    except Exception as exc:
+        if _router_refused(exc):
+            logger.info("chat topics: chat %s ran on %s, refused by the router — not labelled",
+                        chat["sid"], model)
+            run["refused"].add(model)
+        else:
+            logger.exception("chat topics: labelling failed chat=%s model=%s", chat["sid"], model)
+            run["failed"] = True
+        return None
+    idle = datetime.now(timezone.utc) - chat["last_at"]
+    full = len(window) == CHAT_TOPICS_WINDOW or len(window) < len(rest)
+    freeze = full or idle >= CHAT_TOPICS_FREEZE_IDLE
+    return {**merge_window(toc, exchanges, [e["id"] for e in window], found, freeze), "model": model}
+
+
+async def _relabel(run: dict, chat: dict, exchanges: list[dict], model: str) -> dict | None:
+    """A fresh toc over the whole chat, not saved; None when a call failed or the
+    chat does not fit the run's calls left.
+
+    WHY the run's first call may overspend: a chat of more windows than a whole
+    run's budget would otherwise never be re-labelled."""
+    need = window_count(exchanges)
+    if run["calls"] and run["calls"] + need > CHAT_TOPICS_RUN_CALLS:
+        run["deferred"] = True
+        logger.info("chat topics: re-label of chat %s deferred — %d calls needed, %d spent",
+                    chat["sid"], need, run["calls"])
+        return None
+    toc = _fresh_toc()
+    for _ in range(need):
+        toc = await _label_window(run, chat, toc, exchanges, model)
+        if toc is None:
+            return None
+    logger.info("chat topics: chat %s re-labelled with %s — %d calls, %d topics",
+                chat["sid"], model, need, len(toc["topics"]))
+    return toc
+
+
+def _tail_due(toc: dict, order: list[str], idle: timedelta) -> bool:
+    tail = [m for m in order if m not in toc["labelled_ids"]]
+    return bool(tail) and (len(tail) >= CHAT_TOPICS_CLOSE_EVERY
+                           or idle >= timedelta(minutes=CHAT_TOPICS_IDLE_MIN))
+
+
+async def label_chat(db, chat: dict, user_id: str, project_id: str, run: dict,
+                     model: str | None) -> None:
     """Label one due chat (label_due) as far as its tail is due with `model`
-    (None = no call, the freeze only); returns (model calls, tocs saved, a call
-    failed, the model if the router refused it). The only reader of the chat's
-    full text."""
+    (None = no call, the freeze only), or re-label its stale toc whole; counts
+    into `run`. The only reader of the chat's full text."""
     exchanges = await chat_exchanges(db, chat["sid"])
     toc = await _load_toc(db, chat, exchanges)
     idle = datetime.now(timezone.utc) - chat["last_at"]
     order = [e["id"] for e in exchanges]
-    calls = saved = 0
-    while calls < calls_left:
-        tail = [m for m in order if m not in toc["labelled_ids"]]
-        if not tail or (len(tail) < CHAT_TOPICS_CLOSE_EVERY and idle < timedelta(minutes=CHAT_TOPICS_IDLE_MIN)):
-            break
+
+    async def save() -> None:
+        await save_toc(db, chat, user_id, project_id, toc["model"], toc, exchanges)
+
+    if model is not None and toc["version"] < TOC_VERSION:
+        # WHY saved once at the end: the old toc stays readable until its
+        # replacement is complete, and a failed call leaves it untouched.
+        fresh = await _relabel(run, chat, exchanges, model)
+        if fresh is not None:
+            toc = fresh
+            await save()
+            run["saved"] += 1
+        elif model in run["refused"]:
+            return
+        # WHY no return on a failed or deferred re-label: the due tail is labelled on
+        # the old toc (it stays version 1 and is re-labelled later), or a chat whose
+        # re-label always fails would stop gaining topics.
+    while run["calls"] < CHAT_TOPICS_RUN_CALLS and _tail_due(toc, order, idle):
         if model is None:
-            return calls, saved, False, None
-        window = [e for e in exchanges if e["id"] not in toc["frozen_ids"]][:CHAT_TOPICS_WINDOW]
-        earlier = [t["title"] for t in toc["topics"] if any(m in toc["frozen_ids"] for m in t["message_ids"])]
-        calls += 1
-        try:
-            found = await _ask(model, window, earlier)
-        except Exception as exc:
-            if _router_refused(exc):
-                logger.info("chat topics: chat %s ran on %s, refused by the router — not labelled",
-                            chat["sid"], model)
-                return calls, saved, False, model
-            logger.exception("chat topics: labelling failed chat=%s model=%s", chat["sid"], model)
-            return calls, saved, True, None
-        ids = [e["id"] for e in window]
-        last_window = len(window) == len(order) - len(toc["frozen_ids"])
-        freeze = len(window) == CHAT_TOPICS_WINDOW or (last_window and idle >= CHAT_TOPICS_FREEZE_IDLE)
-        toc = {**merge_window(toc, order, ids, found, freeze), "model": model}
-        await save_toc(db, chat, user_id, project_id, model, toc, exchanges)
-        saved += 1
+            return
+        toc = await _label_window(run, chat, toc, exchanges, model)
+        if toc is None:
+            return
+        await save()
+        run["saved"] += 1
     if idle >= CHAT_TOPICS_FREEZE_IDLE and toc.get("model") is not None \
             and len(toc["labelled_ids"]) == len(order) > len(toc["frozen_ids"]):
         # A day idle with the tail already labelled: freeze it, no call owed.
         toc = {**toc, "frozen_ids": list(toc["labelled_ids"]),
                "topics": [{**t, "frozen": True} for t in toc["topics"]]}
-        await save_toc(db, chat, user_id, project_id, toc["model"], toc, exchanges)
-    return calls, saved, False, None
+        await save()
 
 
 # ─── tasks ───────────────────────────────────────────────────────────────────
 
 
-async def _pair_pass(db, user_id: str, project_id: str, calls_left: int,
-                     first: set[str], refused: set[str]) -> tuple[int, int, int, bool, set[str]]:
-    """One seed + verify + label pass, the chats in `first` taken first, chats
-    on a model in `refused` skipped; returns (tocs pruned, model calls, tocs
-    saved, a call failed, the refused models so far)."""
+async def _pair_pass(db, user_id: str, project_id: str, run: dict, first: set[str]) -> int:
+    """One seed + verify + label pass, the chats in `first` taken first, stale
+    tocs with no due tail last, chats on a model the router refused skipped;
+    counts into `run`, returns how many tocs were pruned."""
     chats = await labelled_chats(db, user_id, project_id, await memory_personas(db, project_id))
     await seed_branch_tocs(db, user_id, project_id, chats)
     dropped, tocs = await verify_tocs(db, user_id, project_id,
                                       {c["sid"]: c["exchanges"] for c in chats})
-    calls = saved = 0
-    failed = False
     if chats and not await instance_skill_disabled(db, CHAT_RECALL_SKILL):
         now = datetime.now(timezone.utc)
-        for chat in sorted(chats, key=lambda c: c["sid"] not in first):  # stable: newest first within
-            if calls >= calls_left:
+        owed = [(c, label_due(c, tocs.get(c["sid"]), now)) for c in chats]
+        # stable: newest first within
+        for chat, what in sorted(owed, key=lambda o: (o[1] == "relabel", o[0]["sid"] not in first)):
+            if run["calls"] >= CHAT_TOPICS_RUN_CALLS:
                 break
-            owed = label_due(chat, tocs.get(chat["sid"]), now)
-            model = await _labeller_model(db, chat, user_id, chat["model"]) if owed == "call" else None
-            if owed is None or (owed == "call" and model is None):
+            if what is None:
                 continue
-            if model in refused:
-                continue
-            c, s, f, r = await label_chat(db, chat, user_id, project_id, calls_left - calls, model)
-            calls, saved, failed = calls + c, saved + s, failed or f
-            if r:
-                refused = refused | {r}
-    return dropped, calls, saved, failed, refused
+            model = None
+            if what != "freeze":
+                model = await _labeller_model(db, chat, user_id, chat["model"])
+                if model is None or model in run["refused"]:
+                    continue
+            await label_chat(db, chat, user_id, project_id, run, model)
+    return dropped
 
 
 async def chat_topics_pair_task(ctx, user_id: str, project_id: str) -> None:
@@ -541,34 +557,32 @@ async def chat_topics_pair_task(ctx, user_id: str, project_id: str) -> None:
     db = await get_db()
     await take_rerun(ctx)
     first: set[str] = set()
-    refused: set[str] = set()
-    dropped = calls = saved = 0
-    failed = False
+    run = new_run()
+    dropped = 0
     for _ in range(CHAT_TOPICS_RERUNS):
         first |= await take_topics_first(ctx, user_id, project_id)
-        d, c, s, f, refused = await _pair_pass(db, user_id, project_id,
-                                               CHAT_TOPICS_RUN_CALLS - calls, first, refused)
-        dropped, calls, saved, failed = dropped + d, calls + c, saved + s, failed or f
+        dropped += await _pair_pass(db, user_id, project_id, run, first)
         # WHY: a post that lands after this check and before arq finishes the
         # job sets a flag no pass consumes (the next run clears it at start) —
         # milliseconds wide; the hourly sweep reconciles it (see the INVARIANT
         # in recall._post_reconcile).
         if not await take_rerun(ctx):
             break
-    # WHY all three: a spent budget means work may remain; a saved toc and no
+    # WHY all three: a spent budget or a deferred re-label means work remains; a saved toc and no
     # failed call mean the labeller is up — a down one must not loop every
     # minute, the hourly sweep retries it.
-    more = calls >= CHAT_TOPICS_RUN_CALLS and saved > 0 and not failed
+    spent = run["calls"] >= CHAT_TOPICS_RUN_CALLS or run["deferred"]
+    more = spent and run["saved"] > 0 and not run["failed"]
     if more:
         # WHY re-mark: the priority ids were popped at this run's start; a budget
         # spent before they were all labelled must not demote the rest to
         # newest-first. Already-labelled ones are not due and cost nothing.
         await mark_topics_first(user_id, project_id, first)
         await schedule_chat_topics_more(user_id, project_id)
-    if dropped or calls:
+    if dropped or run["calls"]:
         logger.info("chat topics user=%s project=%s: pruned %d stale tocs, %d model calls, "
                     "%d saved, failed=%s, continuation=%s",
-                    user_id, project_id, dropped, calls, saved, failed, more)
+                    user_id, project_id, dropped, run["calls"], run["saved"], run["failed"], more)
 
 
 async def chat_topics_idle_task(ctx, user_id: str, project_id: str) -> None:

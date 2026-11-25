@@ -15,6 +15,7 @@ not weaken one "for the tool"; the tool adds its own scope narrowing ON TOP
 from __future__ import annotations
 
 import json
+import logging
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -45,6 +46,8 @@ from pipeline.core.registry import foreign_scoped_param, pipeline_names
 from pipeline.digest.triggers import enqueue_digest
 from pipeline.extractor.params import resolve_extractor_params
 from pipeline.extractor.runner import enqueue_extract
+
+logger = logging.getLogger(__name__)
 
 # ─── agent_configs bindings ──────────────────────────────────────────────────
 
@@ -310,6 +313,42 @@ async def _load_owned_schedule(schedule_id: str, user: dict) -> dict:
     return row
 
 
+async def _digest_schedule_author(row: dict) -> str | None:
+    """`created_by` of the live binding a digest schedule runs; None when its
+    config_id is unreadable or resolves to no live binding of the schedule's project."""
+    try:
+        params = json.loads(row.get("params_json") or "{}")
+    except (TypeError, ValueError):
+        params = None
+    config_id = params.get("config_id") if isinstance(params, dict) else None
+    binding = None
+    if config_id and isinstance(config_id, str):
+        binding = await fetch_one("agent_configs", config_id)
+    if not binding or extract_id(binding.get("project_id")) != row.get("project_id"):
+        logger.warning(
+            "Digest schedule %s has no live binding in its project (config_id=%r): judged as authorless",
+            extract_id(row.get("id")), config_id,
+        )
+        return None
+    return binding.get("created_by")
+
+
+async def _require_digest_schedule(row: dict, user: dict, *, stops: bool, steers: bool) -> None:
+    """The digest-author gate on an existing schedule; other pipelines pass.
+    `stops` = disable or delete, `steers` = enable or change the interval."""
+    if row.get("pipeline") != "digest":
+        return
+    project_id = row.get("project_id", "")
+    # INVARIANT(security): stopping a digest's schedule needs the right to delete its binding, starting or re-timing it the right to run it; project-full alone is neither.
+    # Why: the digest reads its author's chats, and the schedule is a second handle on the same binding.
+    # WHY authorless, not the schedule's own created_by: an unresolvable binding must not hand out rights; a project root (and, to stop or delete, an instance admin) can still remove the row.
+    author = await _digest_schedule_author(row)
+    if stops:
+        await require_digest_deleter(project_id, user, author)
+    if steers:
+        await require_digest_editor(project_id, user, author)
+
+
 def serialize_schedule(row: dict) -> dict:
     out = serialize_record(row, "schedule_id")
     # params_json → params (parsed; a corrupt blob surfaces as {} — the row was
@@ -404,11 +443,16 @@ async def create_schedule(body: PipelineScheduleCreate, user: dict) -> dict:
 
 async def patch_schedule(schedule_id: str, body: PipelineSchedulePatch, user: dict) -> dict:
     db = await get_db()
-    await _load_owned_schedule(schedule_id, user)
+    current = await _load_owned_schedule(schedule_id, user)
     # see SYSTEM: capability-tiers — re-ENABLING a schedule is a new cost start
     # (the 'ai' gate); disabling or changing the interval is not.
     if body.enabled is True:
         await require_tier(user, "ai")
+    await _require_digest_schedule(
+        current, user, stops=body.enabled is False,
+        # WHY: an empty patch counts as steering — it still writes updated_at.
+        steers=body.enabled is not False or body.interval_s is not None,
+    )
     sets = ["updated_at = time::now()"]
     if body.enabled is not None:
         sets.append("enabled = $enabled")
@@ -427,7 +471,8 @@ async def patch_schedule(schedule_id: str, body: PipelineSchedulePatch, user: di
 
 
 async def delete_schedule(schedule_id: str, user: dict) -> dict:
-    await _load_owned_schedule(schedule_id, user)
+    row = await _load_owned_schedule(schedule_id, user)
+    await _require_digest_schedule(row, user, stops=True, steers=False)
     await soft_delete("pipeline_schedules", schedule_id)
     return {"success": True}
 

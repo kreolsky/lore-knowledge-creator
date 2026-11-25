@@ -9,10 +9,11 @@
 import { randomUUID } from 'node:crypto'
 import http from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { ContextPressureProjection } from '@deepseek-ai/dsh-token-meter'
 
 import {
   gatewayOf, piAiEffortKey,
@@ -115,7 +116,9 @@ export async function promptContent(
     if (p.type === 'image_url') {
       const url = (p.image_url as Record<string, unknown> | undefined)?.url
       const match = typeof url === 'string' ? IMAGE_DATA_URI_RE.exec(url) : null
-      if (!match) {
+      // WHY undefined checks, not truthiness: an EMPTY payload still reaches the
+      // store, which reports it with its own reason.
+      if (match?.[1] === undefined || match[2] === undefined) {
         blocks.push(notDelivered('image url is not a data URI'))
         continue
       }
@@ -287,7 +290,7 @@ export function contextUsageFrame(
     console.error('[lore-driver] contextPressure snapshot failed:', err)
     return null
   }
-  const pressure = values?.contextPressure
+  const pressure = values?.contextPressure as ContextPressureProjection | null | undefined
   if (!pressure || typeof pressure !== 'object') return null
   if (typeof pressure.pressureTokens !== 'number') return null
   const used = typeof pressure.projectedTokens === 'number'
@@ -598,8 +601,7 @@ function sessionIdOf(
 // parked and the next send starts it. Idempotent: nothing running answers
 // {stopped:false}.
 export async function stop(
-  ctx: Context, map: SessionMap,
-  req: http.IncomingMessage, res: http.ServerResponse,
+  map: SessionMap, req: http.IncomingMessage, res: http.ServerResponse,
 ): Promise<void> {
   if (!authorized(req)) {
     res.writeHead(401).end('unauthorized')

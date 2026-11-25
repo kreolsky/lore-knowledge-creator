@@ -25,7 +25,7 @@ EXPORT_SUBTREE_MD_TOOL: dict = {
         "parameters": {
             "type": "object",
             "properties": {
-                "root_id": {
+                "document_id": {
                     "type": "string",
                     "description": (
                         "The document whose subtree to export (itself + all "
@@ -33,7 +33,7 @@ EXPORT_SUBTREE_MD_TOOL: dict = {
                     ),
                 },
             },
-            "required": ["root_id"],
+            "required": ["document_id"],
         },
     },
 }

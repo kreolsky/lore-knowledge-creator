@@ -275,7 +275,7 @@ async def _apply_create_document_direct(
         media_type=media_type,
         import_tables=True, check_cell_cap=True,
     )
-    result = {"status": "applied", "doc_id": created["doc_id"]}
+    result = {"status": "applied", "document_id": created["doc_id"]}
     if created.get("tables"):
         # The agent learns the fresh table ids without a read_document.
         result["tables"] = created["tables"]
@@ -307,7 +307,10 @@ async def _apply_create_reference_direct(
         import_tables=True, check_cell_cap=True,
     )
     ref_id = created["doc_id"]
-    result = {"status": "applied", "reference_id": ref_id, "doc_id": ref_id}
+    # The node is both a reference and a document: both names are inputs of
+    # other tools (reprocess_reference takes reference_id, read_document takes
+    # document_id), so the answer carries both under the names those tools take.
+    result = {"status": "applied", "reference_id": ref_id, "document_id": ref_id}
     if created.get("tables"):
         # The agent learns the fresh table ids without a read_document.
         result["tables"] = created["tables"]

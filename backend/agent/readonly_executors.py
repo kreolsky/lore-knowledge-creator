@@ -177,7 +177,7 @@ def _build_read_result(
         full_content, offset, limit, slice_chars=slice_chars, max_chars=max_chars,
     )
     result = {
-        "doc_id": resolved,
+        "document_id": resolved,
         "title": doc.get("title") or "",
         "content": content,
         "offset": start,

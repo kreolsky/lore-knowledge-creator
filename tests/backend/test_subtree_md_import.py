@@ -209,7 +209,7 @@ async def test_import_dir_index_readme_and_empty_dir(
         "Guide/Empty/anything.png": PNG_BYTES,  # dir with only assets → empty doc
         ".obsidian/workspace.json": "{}",
     })
-    assert result["root_id"]
+    assert result["document_id"]
     tree = await _tree(test_db, pid)
     by_title = {d["title"]: d for d in tree if not d["is_ref"]}
     # INDEX.md wins over README.md as the parent's content.
@@ -351,7 +351,7 @@ async def test_round_trip_export_then_import(
             {"id": doc_id, "p": root},
         )
     # Export.
-    resp = await _mcp(client, rw_key, "export_subtree_md", {"root_id": root})
+    resp = await _mcp(client, rw_key, "export_subtree_md", {"document_id": root})
     export = _result(resp)
     dl = await client.get(export["url"])
     assert dl.status_code == 200
@@ -364,11 +364,11 @@ async def test_round_trip_export_then_import(
         for name in zipfile.ZipFile(buf).namelist()
     }
     result = await _import_files(client, rw_key, host2, files)
-    assert result["root_id"], result
+    assert result["document_id"], result
 
     tree = await _tree(test_db, pid)
     docs = [d for d in tree if not d["is_ref"]]
-    new_root = next(d for d in docs if d["id"] == result["root_id"])
+    new_root = next(d for d in docs if d["id"] == result["document_id"])
     assert new_root["title"] == "Research"
     assert new_root["parent"] == host2
     assert await _content_of(test_db, new_root["id"]) == "root body"

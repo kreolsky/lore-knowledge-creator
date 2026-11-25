@@ -196,6 +196,13 @@ def _require_writable(ctx: dict) -> None:
         )
 
 
+def _not_routed(name: str) -> HTTPException:
+    """The refusal of a tool this surface does not serve."""
+    refusal = HTTPException(status_code=404, detail=f"Tool not routed over MCP yet: {name}")
+    refusal.next_action = "pick a tool from tools/list"
+    return refusal
+
+
 async def dispatch_tool(name: str, args: dict, ctx: dict) -> dict:
     """Route ONE MCP tool call to the registry handler.
 
@@ -214,7 +221,7 @@ async def dispatch_tool(name: str, args: dict, ctx: dict) -> dict:
     """
     entry = REGISTRY.get(name)
     if entry is None or "mcp" not in entry.surfaces:
-        raise HTTPException(status_code=404, detail=f"Tool not routed over MCP yet: {name}")
+        raise _not_routed(name)
     from mcp_gateway.schemas import _served_mcp_names, preview_extractor_visible
 
     if name not in _served_mcp_names(
@@ -222,7 +229,7 @@ async def dispatch_tool(name: str, args: dict, ctx: dict) -> dict:
     ):
         # Deployment gate (preview_extractor) — NOT advertised ⇒ NOT routed, the
         # same single predicate tools/list serves under.
-        raise HTTPException(status_code=404, detail=f"Tool not routed over MCP yet: {name}")
+        raise _not_routed(name)
     if entry.mutating:
         _require_writable(ctx)
         ctx["force_auto_apply"] = True

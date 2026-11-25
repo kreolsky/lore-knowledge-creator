@@ -40,7 +40,9 @@ from where) and carries no image markup. To save it: `import_file` with that
 To list, read or analyse a chat: `list_my_chats` (with `with_topics: true` when the
 user asks what their chats were about), then `read_my_chat` with `topics_only: true`
 — the topics are the map; jump with `from_turn`, or read from turn 0 following
-`next_turn`. A topic is a summary: quote and decide only from turns you read.
+`next_turn`. A topic is a summary: quote and decide only from turns you read. One
+exception: a topic's `marks` carry the user's own `quote` — rely on it as said then.
+A topic without a mark says nothing about what they like.
 `topics: null` means no table of contents yet — read the chat.
 
 A hidden (`unindexed`) chat is invisible to these tools — if the user asks for one,
