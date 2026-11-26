@@ -376,6 +376,25 @@ def _log_turn_payload(session_id: str, prompt) -> None:
     )
 
 
+def _persona_skill_fields(
+    preload: list[str] | None, allow: list[str] | None, deny: list[str] | None,
+) -> dict:
+    """The persona's three skill lists of the turn wire, RAW — names or masks.
+
+    `preload_skills`: the skills the plugin activates and injects before the
+    first step (harness-driver/plugin/src/preload.ts). `skill_allow` /
+    `skill_deny`: the visible set — the plugin expands them against the catalog
+    it resolves and withholds a hidden skill's pack (skills.ts). The backend
+    parses no skill and reads no list's contents, so every field is the raw
+    list, [] when absent.
+    """
+    return {
+        "preload_skills": list(preload or []),
+        "skill_allow": list(allow or []),
+        "skill_deny": list(deny or []),
+    }
+
+
 def _build_turn_payload(
     *, model: str, system_prompt: str, tools: list[dict],
     agent_key: str, apply_mode: str, session_id: str = "", user_id: str = "",
@@ -383,8 +402,9 @@ def _build_turn_payload(
     prompt: str | list = "", assistant_msg_id: str = "",
     time_stamps: list[str] | None = None,
     skills: dict | list | None = None,
-    preload_skills: list[str] | None = None, memory_block: str = "",
+    preload_skills: list[str] | None = None, memory_block: str = "", recall_block: str = "",
     memory_persona: str = "", reasoning_effort: str | None = None,
+    skill_allow: list[str] | None = None, skill_deny: list[str] | None = None,
     ai_api_url: str = "", ai_api_key: str = "",
     title_model: str = "", web_search_provider: str = "",
     web_search_credential: str = "", mcp_servers: list[dict] | None = None,
@@ -410,10 +430,8 @@ def _build_turn_payload(
         # The RAW skills wire: {project, instance, shipped, instance_tombstones}
         # — the plugin parses them.
         "skills": skills if skills else [],
-        # The persona's preloaded skill names and its chat-memory block — the
-        # plugin activates / injects them (harness-driver/plugin/src/preload.ts).
-        "preload_skills": list(preload_skills or []),
-        "memory_block": memory_block, "memory_persona": memory_persona,
+        **_persona_skill_fields(preload_skills, skill_allow, skill_deny),
+        "memory_block": memory_block, "memory_persona": memory_persona, "recall_block": recall_block,
         # ARCH: present ONLY when the session
         # pins an effort — ABSENT = Default (no reasoning_effort on the wire,
         # the provider's default applies), never a null/'' placeholder (the

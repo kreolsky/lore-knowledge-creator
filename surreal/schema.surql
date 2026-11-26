@@ -1214,7 +1214,7 @@ DEFINE FIELD IF NOT EXISTS origin_persona_id ON chat_sessions TYPE option<string
 -- error: why the persona's memory is off | NONE,
 -- persona_id: the persona the block was built for; a different current persona
 -- rebuilds and overwrites}. NONE = nothing decided yet.
--- Written after a send is accepted (_record_chat_memory,
+-- Written after a send is accepted (_record_chat_block,
 -- routes/chat/completions_harness.py), only while NONE, errored, chats = [] or
 -- built for another persona — those are exactly the states that rebuild the
 -- block; a branch inherits it when
@@ -1239,6 +1239,29 @@ DEFINE FIELD IF NOT EXISTS memory.chats ON chat_sessions TYPE option<array<objec
 DEFINE FIELD IF NOT EXISTS memory.chats[*].sid ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS memory.chats[*].date ON chat_sessions TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS memory.error ON chat_sessions TYPE option<string>;
+
+-- ARCH: what earlier conversations this chat was reminded of on its own — the
+-- persona auto-recall (backend/chat_auto_recall.py):
+-- {message_id: the user message of the turn that carried the recall,
+-- persona_id: the persona it was built for, chats: [{sid, date}]}.
+-- NONE = nothing recalled yet. Written after a send is accepted by the same
+-- guarded write as `memory` (_record_chat_block, routes/chat/
+-- completions_harness.py) and ONLY with hits: an empty, gated or failed attempt
+-- leaves the row alone, so the next turn tries again; a persona switch
+-- overwrites it with the new persona's recall. A branch inherits it when its
+-- copied prefix holds the recall turn (routes/chat/branches.py). Titles are
+-- resolved at read (GET /chat/sessions/{id}/memory), never stored — as memory's.
+-- WHY beside `memory`, not inside it: `memory` is replaced WHOLE on a persona
+-- switch and on every rebuild of an empty block, which would drop a recall
+-- nested in it.
+-- WHY option on every field: the same as `memory`'s — an absent record is what
+-- says "nothing recalled yet", and no row is backfilled into carrying one.
+DEFINE FIELD IF NOT EXISTS recall ON chat_sessions TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS recall.message_id ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS recall.persona_id ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS recall.chats ON chat_sessions TYPE option<array<object>>;
+DEFINE FIELD IF NOT EXISTS recall.chats[*].sid ON chat_sessions TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS recall.chats[*].date ON chat_sessions TYPE option<string>;
 
 -- ARCH: the chat-recall search index — a disposable cache rebuilt from
 -- `messages` by reconciliation (jobs/tasks/chat_index.py), never written by a
@@ -1529,6 +1552,17 @@ DEFINE FIELD IF NOT EXISTS help_url   ON mcp_servers TYPE option<string>;
 -- card (the driver's ask gate, harness-driver/plugin/src/mcp-servers.ts).
 DEFINE FIELD IF NOT EXISTS auto_approve ON mcp_servers TYPE bool DEFAULT false
   MIGRATE EXISTING ROWS AS mcp_servers_auto_approve USING $value ?? false FALLBACK false;
+-- The definer's ruling that the server rides a chat only after the agent loads
+-- its `mcp-<name>` skill (the driver's lazy mount, harness-driver/plugin/src/
+-- mcp-servers.ts). The name must then fit dsh's skill grammar.
+DEFINE FIELD IF NOT EXISTS on_demand ON mcp_servers TYPE bool DEFAULT false
+  MIGRATE EXISTING ROWS AS mcp_servers_on_demand USING $value ?? false FALLBACK false;
+-- The server's own MCP `instructions` and tool names, captured by the last
+-- successful connection check: the on-demand skill's description must be
+-- known before any connection.
+DEFINE FIELD IF NOT EXISTS server_instructions ON mcp_servers TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS server_tools ON mcp_servers TYPE array<string> DEFAULT []
+  MIGRATE EXISTING ROWS AS mcp_servers_server_tools USING $value ?? [] FALLBACK [];
 -- The shared key's Fernet ciphertext and the host_key of the url it was
 -- saved against: a url move to another host strands it exactly like a
 -- personal key ("re-enter key"). Write-only for everyone incl. the admin.

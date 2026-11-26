@@ -24,6 +24,10 @@ The header's `priority` list runs from most urgent to least: its FIRST value
 is served first. The `ask` status (`next_task` returns it; null when the
 schema has none) is where a task waits for the person's answer.
 
+Writing the log and creating tasks needs the `main-edit` skill; reading the
+parent and neighbours needs `main-read` — load them. If `main-edit` is hidden
+from you, do not hand a task back without its report: say so in your reply.
+
 ## The loop
 
 1. `next_task(agent_name)` — first look at `in_progress`: an entry whose
@@ -48,8 +52,10 @@ schema has none) is where a task waits for the person's answer.
    resolve parks the task instead (see Ambiguity). Never close on your own
    initiative — review is the hand-back to the person, and closing is theirs:
    when the person explicitly asks you to close that task, call
-   `set_task_status` with a closed status. Never change `status:` by editing
-   the header.
+   `set_task_status` with a closed status. «Отмени» / «cancel» on the
+   person's word is the closed status `dropped` (when the schema lists it),
+   with the reason written into the log first. Never change `status:` by
+   editing the header.
 
 A 409 `open_subtasks` or `already_claimed` from `set_task_status` is reported
 to the person, not worked around. A 500 after a close is retried once with
@@ -129,7 +135,12 @@ Two statuses take a new task, by who sent it to work. A reminder («надо б�
 get the initial status: a draft, thought through in Lore with the person
 before it becomes ready, and agents do not take it. A formulated intent the
 person sends to work («делай таску») gets the ready status; the plan is
-written and discussed from there.
+written and discussed from there. A draft moves to ready only on the
+person's word.
+
+An `assignee: <agent name>` on a resting task (initial, ask or ready)
+reserves it: other agents skip it. A return to ask clears it, so after your
+question the person repeats the assignment.
 
 A task document (the header is the contract; the body states intent):
 
@@ -137,6 +148,7 @@ A task document (the header is the contract; the body states intent):
     type: task
     status: <the initial or the ready status>
     priority: <a value from the schema's priority list, optional>
+    assignee: <an agent's name, optional — reserves the task for it>
     depends:
       - "[title](doc:<id>)"
     ---
@@ -149,10 +161,10 @@ A schema document (one per project, authored by the team):
     ---
     type: schema
     schema_for: task
-    statuses: [draft, ask, todo, doing, review, done]
+    statuses: [draft, ask, todo, doing, review, done, dropped]
     ready: todo
     claimed: doing
-    closed: [done]
+    closed: [done, dropped]
     initial: draft
     ask: ask
     priority: [urgent, high, normal, low]

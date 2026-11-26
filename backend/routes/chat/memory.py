@@ -1,4 +1,4 @@
-"""Chat memory read routes: the chat's table of contents, the memory it received, and the project's memory-ON personas.
+"""Chat memory read routes: the chat's table of contents, the memory and the recall it received, and the project's memory-ON personas.
 
 WHY the session guard is the whole access check on both: a synopsis restates
 text this reader already receives from list_messages under the same guard, and
@@ -57,25 +57,39 @@ async def chat_toc(session_id: str, user: dict = Depends(get_current_user), db: 
 
 @router.get("/sessions/{session_id}/memory")
 async def chat_memory(session_id: str, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """The conversation memory this chat received: `{message_id, error, chats:
-    [{sid, title, date}], hidden}`, or `{"memory": null}` when none was decided.
+    """The conversation memory and the auto-recall this chat received:
+    `{"memory": {message_id, error, chats: [{sid, title, date}], hidden},
+    "recall": {message_id, chats: [{sid, title, date}], hidden}}` — a record is
+    null when none was written.
 
     A recorded chat that `visible_sessions` no longer returns (deleted,
     unindexed, under a hidden subtree) is left out and counted in `hidden`.
     """
     session = await _require_session_access(session_id, user)
-    record = session.get("memory")
-    if not record:
-        return {"memory": None}
+    memory, recall = session.get("memory"), session.get("recall")
+    if not memory and not recall:
+        return {"memory": None, "recall": None}
     visible, _ = await visible_for_chat(
         db, session_id, session, user["user_id"], session["project_id"])
+    out = {"memory": _received(memory, visible), "recall": _received(recall, visible)}
+    # Why memory is on or off, as stored — a recall record is written only with
+    # hits, so it never carries one.
+    if out["memory"] is not None:
+        out["memory"]["error"] = (memory or {}).get("error")
+    return out
+
+
+def _received(record: dict | None, visible: dict) -> dict | None:
+    """A stored record as the client reads it: `None` when there is none, else
+    its message, the recorded chats whose titles the visible chats still give,
+    and how many they no longer do."""
+    if not record:
+        return None
     recorded = record.get("chats") or []
     chats = [{"sid": c["sid"], "title": visible[c["sid"]]["title"], "date": c["date"]}
              for c in recorded if c["sid"] in visible]
-    return {"memory": {
-        "message_id": record.get("message_id"), "error": record.get("error"),
-        "chats": chats, "hidden": len(recorded) - len(chats),
-    }}
+    return {"message_id": record.get("message_id"),
+            "chats": chats, "hidden": len(recorded) - len(chats)}
 
 
 @router.get("/memory-personas")

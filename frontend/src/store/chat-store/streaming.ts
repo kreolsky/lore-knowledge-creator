@@ -3,7 +3,7 @@
  * ONE transport: the turn is DRIVER-owned — POST /completions answers JSON
  * and the frames arrive as project-WS chat_frame envelopes, dispatched
  * through createTurnSink into the frame handlers + the assembler feed. */
-import type { ChatFile, ChatMemoryRecord, ChatMessage } from '../../types';
+import type { ChatFile, ChatMemoryRecord, ChatMessage, ChatRecallRecord, ChatSession } from '../../types';
 import { apiClient } from '../../api/client';
 import { useAppStore } from '../app-store';
 import { t } from '../../i18n';
@@ -248,7 +248,7 @@ function createTurnSink(
         ),
       }));
     },
-    context_warning() { useAppStore.getState().showToast(t('chatContextWarning'), 'warning'); },
+    context_warning(ev) { useAppStore.getState().showToast(contextWarningText(ev), 'warning'); },
     // A live harness signal with no dedicated UI. `model_update` is persisted on
     // the message by the backend reducer, so the frontend renders it from the row
     // on reload; the seat here is documentation, not a guard — a type with NO
@@ -615,15 +615,36 @@ interface CompletionOpts {
   onAccepted?: (messageId: string) => void;
 }
 
-/** The send reply's `memory` (the row's record after the turn) onto the
- * session row — the header's brain and the list's memory row read it. A reply
- * without the key (an older server) changes nothing. */
-export function applyReplyMemory(set: Set, sessionId: string, reply: unknown): void {
-  if (!reply || typeof reply !== 'object' || !('memory' in reply)) return;
-  const memory = (reply as { memory: ChatMemoryRecord | null }).memory;
+/** The turn warning's toast text by its `code` (the frame is
+ * `{type: 'context_warning', code, id, detail}`). WHY per code: one text for
+ * every code read "Some context documents failed to load" — a person would
+ * read a failed or switched-off auto-recall as a document failure. A code this
+ * client does not know keeps the generic text: the server may add codes. */
+export function contextWarningText(ev: { code?: unknown; detail?: unknown }): string {
+  if (ev.code === 'persona_recall_failed') return t('chatRecallFailed');
+  if (ev.code === 'persona_recall_budget' && isNonEmptyStr(ev.detail)) {
+    return t('chatRecallOffNotice', { error: ev.detail });
+  }
+  return t('chatContextWarning');
+}
+
+/** The send reply's `memory` and `recall` (the row's records after the turn)
+ * onto the session row — the header's brain and the list's memory and recall
+ * rows read them. A reply without a key (an older server) changes nothing. */
+export function applyReplyRecords(set: Set, sessionId: string, reply: unknown): void {
+  const records = replyRecords(reply);
+  if (!records) return;
   set(s => ({
-    sessions: s.sessions.map(ss => (ss.session_id === sessionId ? { ...ss, memory } : ss)),
+    sessions: s.sessions.map(ss => (ss.session_id === sessionId ? { ...ss, ...records } : ss)),
   }));
+}
+
+function replyRecords(reply: unknown): Pick<ChatSession, 'memory' | 'recall'> | null {
+  if (!reply || typeof reply !== 'object') return null;
+  const out: Pick<ChatSession, 'memory' | 'recall'> = {};
+  if ('memory' in reply) out.memory = (reply as { memory?: ChatMemoryRecord | null }).memory;
+  if ('recall' in reply) out.recall = (reply as { recall?: ChatRecallRecord | null }).recall;
+  return Object.keys(out).length ? out : null;
 }
 
 async function _harnessCompletion(
@@ -653,7 +674,7 @@ async function _harnessCompletion(
   try {
     const reply = await apiClient.post(endpoint, opts.body, { signal: opts.signal });
     if (isNonEmptyStr(reply?.message_id)) opts.onAccepted?.(reply.message_id);
-    applyReplyMemory(set, sessionId, reply);
+    applyReplyRecords(set, sessionId, reply);
   } catch (e) {
     if (turn.settled) return;
     // Nothing was queued (a refused send emits no frames — the HTTP status

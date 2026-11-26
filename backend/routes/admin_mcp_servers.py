@@ -44,6 +44,8 @@ class McpServerCreate(BaseModel):
     enabled: bool = True
     #: Every tool of the server runs with no approval card.
     auto_approve: bool = False
+    #: The server rides a chat only after the agent loads its skill.
+    on_demand: bool = False
 
 
 class McpServerUpdate(BaseModel):
@@ -63,6 +65,7 @@ class McpServerUpdate(BaseModel):
     subjects: list[str] | None = None
     enabled: bool | None = None
     auto_approve: bool | None = None
+    on_demand: bool | None = None
 
 
 async def _validate_subjects(db: AsyncSurreal, subjects: list[str]) -> list[str]:
@@ -139,6 +142,7 @@ def _admin_view(row: dict, creator_name: str = "") -> dict:
         "created_by_name": creator_name,
         "enabled": bool(row.get("enabled")),
         "auto_approve": bool(row.get("auto_approve")),
+        "on_demand": bool(row.get("on_demand")),
         "shared_key_set": shared_set,
         # A url move to another host strands the stored key: it is bound to
         # the host it was saved against.
@@ -242,6 +246,8 @@ async def create_server(
             help_url=body.help_url,
         )
         await mcp_servers.check_egress(fields["host"])
+        if body.on_demand:
+            mcp_servers.check_on_demand_name(fields["name"])
         if body.shared_key is not None and fields["auth_mode"] != "shared":
             raise mcp_servers.McpServerError(
                 "shared_key is only valid for a shared-key server",
@@ -261,6 +267,7 @@ async def create_server(
         "created_by": user["user_id"],
         "enabled": body.enabled,
         "auto_approve": body.auto_approve,
+        "on_demand": body.on_demand,
         "disabled_by": [],
     })
     if row is None:
@@ -294,6 +301,13 @@ def _patch_column_sets(
         sets["enabled"] = body.enabled
     if body.auto_approve is not None:
         sets["auto_approve"] = body.auto_approve
+    if body.on_demand is not None:
+        sets["on_demand"] = body.on_demand
+    if body.on_demand if body.on_demand is not None else row.get("on_demand"):
+        try:
+            mcp_servers.check_on_demand_name(fields["name"])
+        except mcp_servers.McpServerError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     return sets, purge_personal
 
 
@@ -350,9 +364,10 @@ async def check_server(
     row = await _scoped_row(db, user, server_id)
     try:
         headers = await mcp_servers.checkable_headers(db, row, user=None)
-        return await mcp_servers.check_connection(row.get("url") or "", headers)
+        verdict = await mcp_servers.check_connection(row.get("url") or "", headers)
     except mcp_servers.McpServerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await mcp_servers.store_capture(db, server_id, verdict)
 
 
 @router.delete("/{server_id}")

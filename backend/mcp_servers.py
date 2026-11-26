@@ -63,6 +63,12 @@ logger = logging.getLogger(__name__)
 # mcp-servers.ts SERVER_NAME_RE.
 SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
+# An on-demand server is advertised as the skill `mcp-<name>`, so its name
+# must also fit dsh's skill grammar (SKILL_NAME in vendor/dsh/packages/skill/
+# skill/src/index.ts) — refused rather than mapped, so two servers never
+# collide on one skill name.
+ON_DEMAND_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
 #: Who holds the key: each user personally, one shared key, or nobody.
 AUTH_MODES = ("personal", "shared", "none")
 
@@ -78,6 +84,10 @@ _CHECK_TIMEOUT_S = 8.0
 
 #: The longest server error message a check verdict relays.
 _MAX_DETAIL = 200
+
+#: Bounds of what a check captures for the on-demand skill.
+_MAX_INSTRUCTIONS = 4000
+_MAX_TOOL_NAMES = 50
 
 
 class McpServerError(ValueError):
@@ -145,6 +155,15 @@ def validate_definition(
         "host": host,
         "port": port,
     }
+
+
+def check_on_demand_name(name: str) -> None:
+    """McpServerError unless `name` can be the on-demand skill's suffix."""
+    if not ON_DEMAND_NAME_RE.fullmatch(name):
+        raise McpServerError(
+            "rename the server to lowercase letters, digits and hyphens "
+            "to load it on demand",
+        )
 
 
 def normalize_key(value: str, scheme: str) -> str:
@@ -439,6 +458,9 @@ async def _render_one(db: AsyncSurreal, user_id: str, row: dict) -> dict | None:
         "headers": _auth_headers(row, key),
         "secret_values": [key] if key else [],
         "auto_approve": bool(row.get("auto_approve")),
+        "on_demand": bool(row.get("on_demand")),
+        "instructions": row.get("server_instructions") or "",
+        "tool_names": list(row.get("server_tools") or []),
     }
 
 
@@ -471,7 +493,9 @@ def prompt_section(entries: list[dict]) -> str:
     prompt: one line per server — `name — title` plus its mcp__<name>__ tool
     prefix — sorted by name, whitespace-collapsed (a title must not inject a
     prompt line). No entries → "" (the prompt stays byte-identical for a
-    user with no servers)."""
+    user with no servers). An on-demand server is not listed: the skill
+    catalog advertises it as `mcp-<name>`."""
+    entries = [e for e in entries if not e.get("on_demand")]
     if not entries:
         return ""
     lines = sorted(
@@ -507,9 +531,10 @@ class _Unauthorized(Exception):
     """Sentinel: the handshake's JSON-RPC error carried a 401/403 status."""
 
 
-async def _sdk_handshake(url: str, headers: dict[str, str]) -> int:
-    """initialize + tools/list through the mcp client; returns the tool
-    count. Raises freely — the caller classifies and never re-raises.
+async def _sdk_handshake(url: str, headers: dict[str, str]) -> tuple[str, list[str]]:
+    """initialize + tools/list through the mcp client; returns the server's
+    `instructions` ('' when absent) and its tool names. Raises freely — the
+    caller classifies and never re-raises.
 
     WHY a float timeout: an httpx.Timeout object breaks this mcp build's
     transport arithmetic (TypeError `float + Timeout` under the connect
@@ -520,15 +545,16 @@ async def _sdk_handshake(url: str, headers: dict[str, str]) -> int:
     )
     async with streamable_http_client(url, http_client=http_client) as (read, write):
         async with ClientSession(read, write) as session:
-            await session.initialize()
+            init = await session.initialize()
             result = await session.list_tools()
-    return len(result.tools)
+    return (init.instructions or "", [t.name for t in result.tools])
 
 
 async def check_connection(url: str, headers: dict[str, str]) -> dict:
     """One live `initialize` + `tools/list` against `url` with `headers`:
     `{status: ok|unauthorized|refused|unreachable|protocol, tools: int|None,
-    detail: str|None}` — on a non-2xx answer `detail` is the server's own
+    detail: str|None}` (an `ok` verdict also carries the capture —
+    `instructions`, `tool_names` — that `store_capture` takes off) — on a non-2xx answer `detail` is the server's own
     JSON-RPC error message scrubbed of the key, else `HTTP <code>` (see
     _server_detail).
 
@@ -552,7 +578,7 @@ async def check_connection(url: str, headers: dict[str, str]) -> dict:
     if verdict is not None:
         return verdict
     try:
-        tools = await _sdk_handshake(url, headers)
+        instructions, tool_names = await _sdk_handshake(url, headers)
     except Exception as exc:  # noqa: BLE001 — classified, never re-raised or quoted
         for node in _walk_exc(exc):
             if isinstance(node, MCPError):
@@ -562,7 +588,27 @@ async def check_connection(url: str, headers: dict[str, str]) -> dict:
                     return {"status": "unauthorized", "tools": None, "detail": None}
         logger.warning("mcp connection check failed: %s", type(exc).__name__)
         return {"status": "protocol", "tools": None, "detail": None}
-    return {"status": "ok", "tools": tools, "detail": None}
+    for form in _secret_forms(headers):
+        instructions = instructions.replace(form, "[secret]")
+    return {
+        "status": "ok", "tools": len(tool_names), "detail": None,
+        "instructions": instructions[:_MAX_INSTRUCTIONS],
+        "tool_names": tool_names[:_MAX_TOOL_NAMES],
+    }
+
+
+async def store_capture(db: AsyncSurreal, server_id: str, verdict: dict) -> dict:
+    """Take the capture off a check verdict and, on `ok`, store it on the row
+    for the on-demand skill's description; returns the verdict the route
+    answers (its shape unchanged by the capture)."""
+    instructions = verdict.pop("instructions", None)
+    tool_names = verdict.pop("tool_names", None)
+    if verdict.get("status") == "ok" and tool_names is not None:
+        await update_row(db, server_id, {
+            "server_instructions": instructions or None,
+            "server_tools": tool_names,
+        })
+    return verdict
 
 
 async def _classify_http_post(url: str, headers: dict[str, str]) -> dict | None:

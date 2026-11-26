@@ -118,6 +118,60 @@ async def test_branch_of_an_unseeded_branch_inherits_its_seed_stamp(
     assert row.get("seed_source_seq") is None
 
 
+# TEST-WHY: pure-logic-edge — a branch carries the memory and the recall record only when its copied prefix holds a completed turn after that record's message, remapped onto the copies.
+async def test_branch_inherits_both_records_only_after_their_turns(
+    client, admin_user, project_with_doc, test_db,
+):
+    """Three forks of one chat: after the turn that carried both blocks (both
+    records ride); after the recall's own user message (the memory rides, the
+    recall does not — its turn never completed in that prefix); after the
+    memory turn alone (the recall's message is not in the prefix). A record
+    the log cannot back would stop the branch from ever recalling."""
+    pid, doc_id, _ = project_with_doc
+    _, token = admin_user
+    sid = (await _mk_chat(client, token, pid, doc_id))["session_id"]
+    dsh = f"lore-{sid}"
+    await _mk_msgs(test_db, sid, {
+        "u1": {"role": "user", "parent_id": None},
+        "a1": {"role": "assistant", "parent_id": "u1", "driver_seq": 5, "driver_session": dsh},
+        "u2": {"role": "user", "parent_id": "a1"},
+        "a2": {"role": "assistant", "parent_id": "u2", "driver_seq": 9, "driver_session": dsh},
+    })
+    memory = {"message_id": "u1", "chats": [{"sid": "m-chat", "date": "2026-11-20"}], "persona_id": "P"}
+    recall = {"message_id": "u2", "chats": [{"sid": "r-chat", "date": "2026-11-21"}], "persona_id": "P"}
+    await test_db.query(
+        "UPDATE type::record('chat_sessions', $id) SET memory = $m, recall = $r",
+        {"id": sid, "m": memory, "r": recall},
+    )
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/branches",
+        json={"after_message_id": "a2"}, cookies={"lore_session": token})
+    assert resp.status_code == 201, resp.text
+    b_id = resp.json()["session_id"]
+    row = await _session_row(test_db, b_id)
+    copies = {r["origin_id"]: str(r["mid"]) for r in await _branch_msgs(test_db, b_id)}
+    assert copies.keys() == {"u1", "a1", "u2", "a2"}
+    assert (row["memory"]["message_id"], row["memory"]["chats"]) == (copies["u1"], memory["chats"])
+    assert row["recall"] == recall | {"message_id": copies["u2"]}
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/branches",
+        json={"after_message_id": "u2"}, cookies={"lore_session": token})
+    assert resp.status_code == 201, resp.text
+    started = await _session_row(test_db, resp.json()["session_id"])
+    assert started["memory"]["chats"] == memory["chats"]
+    assert started.get("recall") is None, "a recall whose turn never completed in the prefix must not be claimed"
+
+    resp = await client.post(
+        f"/api/chat/sessions/{sid}/branches",
+        json={"after_message_id": "a1"}, cookies={"lore_session": token})
+    assert resp.status_code == 201, resp.text
+    early = await _session_row(test_db, resp.json()["session_id"])
+    assert early["memory"]["chats"] == memory["chats"]
+    assert early.get("recall") is None, "a recall whose block is not in the log must not be claimed"
+
+
 # ─── Step 2: PATCH active_branch_id (opening a branch = switching) ───────────
 
 

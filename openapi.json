@@ -1379,6 +1379,11 @@
             "title": "Name",
             "type": "string"
           },
+          "on_demand": {
+            "default": false,
+            "title": "On Demand",
+            "type": "boolean"
+          },
           "shared_key": {
             "anyOf": [
               {
@@ -1513,6 +1518,17 @@
               }
             ],
             "title": "Name"
+          },
+          "on_demand": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Demand"
           },
           "shared_key": {
             "anyOf": [
@@ -10318,7 +10334,7 @@
     },
     "/api/chat/sessions/{session_id}/memory": {
       "get": {
-        "description": "The conversation memory this chat received: `{message_id, error, chats:\n[{sid, title, date}], hidden}`, or `{\"memory\": null}` when none was decided.\n\nA recorded chat that `visible_sessions` no longer returns (deleted,\nunindexed, under a hidden subtree) is left out and counted in `hidden`.",
+        "description": "The conversation memory and the auto-recall this chat received:\n`{\"memory\": {message_id, error, chats: [{sid, title, date}], hidden},\n\"recall\": {message_id, chats: [{sid, title, date}], hidden}}` — a record is\nnull when none was written.\n\nA recorded chat that `visible_sessions` no longer returns (deleted,\nunindexed, under a hidden subtree) is left out and counted in `hidden`.",
         "operationId": "chat_memory_api_chat_sessions__session_id__memory_get",
         "parameters": [
           {

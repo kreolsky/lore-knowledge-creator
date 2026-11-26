@@ -119,8 +119,12 @@ model_info:
     compat:
       forceAdaptiveThinking: true
   # Claude 5.5 family over the Anthropic Messages wire. Thinking is adaptive only
-  # (budget_tokens is a 400) and non-default sampling is a 400, hence the two
-  # compat flags. input_cache_write is the 5-minute write rate (1.25x input).
+  # (budget_tokens is a 400) and non-default sampling is a 400, hence the first
+  # two compat flags. supportsEagerToolInputStreaming: false — pi-ai defaults to
+  # Anthropic fine-grained tool streaming, which sends tool arguments unvalidated;
+  # Sonnet then emits non-JSON arguments now and then and the turn fails with
+  # MALFORMED_RESPONSE. Off = arguments arrive buffered and valid, a bit later.
+  # input_cache_write is the 5-minute write rate (1.25x input).
   claude/haiku:
     # Prices for prompts up to 100K tokens; beyond that Anthropic bills 0.0000005 / 0.0000025.
     description: "Claude Haiku 5.5 — fast and cheap, vision, tool calling"
@@ -141,6 +145,7 @@ model_info:
     compat:
       forceAdaptiveThinking: true
       supportsTemperature: false
+      supportsEagerToolInputStreaming: false
   claude/sonnet:
     description: "Claude Sonnet 5.5 — everyday coding and agent work, vision, tool calling"
     context_length: 1000000
@@ -160,6 +165,7 @@ model_info:
     compat:
       forceAdaptiveThinking: true
       supportsTemperature: false
+      supportsEagerToolInputStreaming: false
   claude/opus:
     description: "Claude Opus 5.5 — Anthropic's Opus tier, vision, tool calling"
     context_length: 1000000
@@ -179,6 +185,7 @@ model_info:
     compat:
       forceAdaptiveThinking: true
       supportsTemperature: false
+      supportsEagerToolInputStreaming: false
   kimi:
     description: "Kimi K2.7 Code — Moonshot AI, code-optimized, tool calling, thinking mode"
     context_length: 262144

@@ -4,7 +4,7 @@ import { Fragment, useEffect, useRef, useMemo, useLayoutEffect, useCallback } fr
 import { MessageBubble, type MessageBubbleActions } from './MessageBubble';
 import type { ForkNav } from './MessageBubble';
 import { ChatEmptyList } from './ChatEmptyList';
-import { ChatMemoryRow } from './ChatMemoryRow';
+import { ChatMemoryRow, ChatRecallRow } from './ChatMemoryRow';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import type { ChatMessage } from '../../types';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
@@ -128,9 +128,11 @@ export function MessageList() {
   const messagesError = useChatStore(s => s.messagesError);
   const chatScopeLoading = useChatStore(s => s.chatScopeLoading);
   const activeSessionId = useChatStore(s => s.activeSessionId);
-  // The memory this chat received — its row sits before the user message of
-  // the turn that brought it.
+  // The memory and the auto-recall this chat received — their rows sit before
+  // the user message of the turn that brought them (memory first, as in the
+  // agent's context).
   const memory = useChatStore(s => s.sessions.find(ss => ss.session_id === s.activeSessionId)?.memory);
+  const recall = useChatStore(s => s.sessions.find(ss => ss.session_id === s.activeSessionId)?.recall);
   const loadMessages = useChatStore(s => s.loadMessages);
   // The read keys on the is_note axis — every non-note (AI) session is an agent
   // session; note chats (handled by a different composer) never reach
@@ -545,6 +547,9 @@ export function MessageList() {
           <Fragment key={msg.message_id}>
           {memory && activeSessionId && msg.message_id === memory.message_id && (
             <ChatMemoryRow sessionId={activeSessionId} record={memory} />
+          )}
+          {recall && activeSessionId && msg.message_id === recall.message_id && (
+            <ChatRecallRow sessionId={activeSessionId} record={recall} />
           )}
           <MessageBubble
             message={msg}

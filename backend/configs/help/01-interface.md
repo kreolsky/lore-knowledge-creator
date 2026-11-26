@@ -28,6 +28,8 @@ The available tabs depend on the role: a viewer, for example, has no Chat and no
 - **Access** — public links, privacy (page lock, hiding chats), API keys, arrival notifications, moving to another project (see [Access and publishing](help:access)). On the project's index document it holds only arrival notifications and API keys.
 - **Settings** — project settings: where voice recordings land, the "Interface" section (image previews, notes and chats in the "Links" tab, the agent's sound), members and group access.
 
+Only Chat, References and Notes are remembered per document. Settings, Access, Links, Snapshots and Search open temporarily: switching the document, closing the panel or reloading the page (F5) brings back the remembered tab.
+
 ## Header
 
 Voice recording for the open document (accounts with the voice tier or higher), theme and language switches, [profile settings](help:profile), sign-out. The "Lock screen" button appears once a PIN is set (see [Screen and page lock](help:pin-lock)).

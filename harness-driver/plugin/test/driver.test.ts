@@ -299,6 +299,13 @@ test('ROUTE_BY_API: one map — the caps api names the route', () => {
   assert.equal(ROUTE_BY_API['openai-completions'], 'lore')
 })
 
+// dsh's default transient codes plus MALFORMED_RESPONSE — a route-wide retry
+// for tool-call arguments that are not JSON (ROUTE_RETRY_POLICY in ensure.ts).
+const RETRY_POLICY = {
+  mode: 'normal',
+  retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'MALFORMED_RESPONSE'],
+}
+
 /** A duck-typed settings seam holding several provider routes; `update`
  * records the patch verbatim and deep-merges like the real service. */
 function fakeMultiRouteSettings() {
@@ -328,6 +335,7 @@ test('an anthropic-api model lands under providers.anthropic with the scaffold a
       requestImageMaxBytes: 4194304,
       defaultContextWindow: 128000,
       defaultMaxTokens: 32768,
+      retryPolicy: RETRY_POLICY,
       models: [{
         id: 'deepseek-a/flash',
         reasoningEfforts: { low: 'low', high: 'high', max: 'max' },
@@ -385,6 +393,7 @@ test('an openai model on lore produces today\'s payload unchanged', async () => 
       compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', thinkingFormat: 'openai' },
       defaultContextWindow: 128000,
       defaultMaxTokens: 32768,
+      retryPolicy: RETRY_POLICY,
       models: [{
         id: 'm/x', input: ['text', 'image'], reasoningEfforts: { low: 'low' },
         contextWindow: 128000, maxTokens: 65536,

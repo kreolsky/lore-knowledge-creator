@@ -87,8 +87,22 @@ What a run reads, each time only what appeared after the previous report:
 - your chats opened on the theme document;
 - your other chats in the project that match the theme and the keywords.
 
-A digest reads the chats of the person who set it up. A project owner can also choose other members whose chats it reads; their excerpts are signed with their names. The report is a document every project member can see, so a chat you mark "not indexed" never gets into a digest. A member who leaves the project drops out of the digest. Only the digest's author or the project owner can change or run it; other members can only delete it.
+A digest reads the chats of the person who set it up. A project owner can also choose other members whose chats it reads; their excerpts are signed with their names. The report is a document every project member can see, so a chat you mark "not indexed" never gets into a digest. A member who leaves the project drops out of the digest. Only the digest's author or a project root (see [Access and publishing](help:access)) can change or run it. Deleting a digest is open to its author, a project root, an instance administrator, and the moderator of the group the author belongs to. Stopping or deleting a digest's schedule needs the right to delete it; turning the schedule on or changing its interval needs the right to run it.
 
 Voice notes in the material are signed with who uploaded them and when, like chat lines with their author. If nothing new appeared, a run writes nothing. Deleting a report makes the next run cover its period again. One chat can get into several themes. If a run fails, the reason appears in a "Pipeline Error" system note of the theme document.
 
-Scheduled runs are not configurable from the interface yet (see Planned in [Lore Help](help:index)).
+Scheduled runs have no setting in the interface yet (see Planned in [Lore Help](help:index)), but the agent sets them: ask it to run the digest every so many hours, or to pause the schedule.
+
+If the theme document or the target document is in the trash, scheduled runs are skipped, and one "Pipeline Skipped" system note appears on the first of them that is still alive — the theme document, then the target, then the config document. Once the document is restored, runs resume by themselves.
+
+## Ask the agent
+
+The agent's `pipelines` skill (see [Skills](help:skills)) does the same as the "Pipelines" section, by request:
+
+- lists the pipelines bound to a document;
+- binds an extractor or a digest to a document, or removes a binding;
+- runs a pipeline now, and can wait up to 240 seconds for the result;
+- sets or pauses a digest's schedule;
+- reads the run log and says why a pipeline did or did not run. Each run is recorded with its trigger (an event, a manual run, the schedule) and goes from "running" to "ok" or "error"; "skipped" means there was nothing new to process.
+
+Binding, running and removing are confirmed like the agent's edits; in the Auto mode they apply at once. An external agent on an API key cannot manage pipelines.

@@ -430,8 +430,9 @@ register(ToolEntry(
     surfaces=_AGENT_HTTP,
 ))
 # save_skill (plan skill-authoring-skill): agent-only + always served (no env
-# gate — no external dependency), CORE on purpose so a model that skipped the
-# skill-authoring skill still finds it by name (see specs/skills.py ARCH).
+# gate — no external dependency), packed into the default-preloaded `main-config`
+# skill so a model that skipped the skill-authoring skill still finds it by
+# name (see specs/skills.py ARCH).
 register(ToolEntry(
     spec=SAVE_SKILL_TOOL, request_model=ToolSaveSkill,
     handler_path="routes.tool_api.skills:tool_save_skill",

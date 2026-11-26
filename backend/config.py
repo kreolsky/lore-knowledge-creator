@@ -26,10 +26,10 @@ from comfy_markers import validate_size, validate_workflow
 from settings_registry import (
     ConfigError as ConfigError,  # re-export: `from config import ConfigError` callers stay valid
 )
-from settings_registry import SettingValueError, _section, setting
 from settings_registry import (
     _require_env as _require_env,  # re-export (test seam: tests/backend/test_unit_db.py)
 )
+from settings_registry import _section, setting
 
 # ─── Release version ─────────────────────────────────────────────────────────
 
@@ -459,34 +459,39 @@ MODEL_IMAGE_JPEG_QUALITY = setting(
 
 # ─── Agent prompt ────────────────────────────────────────────────────────────
 _section("agent", "Agent prompt")
-# The token agent_config.render_bootstrap replaces with transclusion_grammar's
-# projected embed-scheme list.
-BOOTSTRAP_EMBED_TOKEN = "{embed_schemes}"
-
-
-def _validate_bootstrap_prompt(raw: object) -> None:
-    """The bootstrap must carry the embed-scheme token exactly once."""
-    count = str(raw).count(BOOTSTRAP_EMBED_TOKEN)
-    # INVARIANT: an override keeps exactly one BOOTSTRAP_EMBED_TOKEN.
-    # Why: the embed grammar the agent is taught is projected from SCHEME_TABLE,
-    # never hand-written (see INVARIANT in backend/transclusion_grammar.py) — a
-    # text without the token would freeze a grammar the parser may no longer have.
-    if count != 1:
-        raise SettingValueError(
-            f"must contain {BOOTSTRAP_EMBED_TOKEN} exactly once (found {count})"
-        )
-
+# The two admin texts every agent turn's system prompt opens with, in this order
+# (assembled in agent_config.build_agent_system_prompt):
+#   - AGENT_BOOTSTRAP_PROMPT — the FLOOR: the rights the agent acts with and the
+#     write contract. Always first, in every project, under every persona.
+#   - AGENT_BASE_PERSONA_PROMPT — the home agent's identity and turn policy. It
+#     follows the floor unless the selected persona's frontmatter says
+#     `base_prompt: false` (persona_settings.parse_persona).
+# INVARIANT(security): both are instance admin settings, never project documents —
+# the agent has no write path to either, and the safety lines live in the floor.
+# Why: the agent must not be able to rewrite the contract that binds it — the
+# user's rights and "a write landed only when it says applied".
+# A project can shadow a skill (the catalog overlay), never these texts; the HOW of
+# reading and changing a document is not here at all — it travels with the tools,
+# in the shipped `main-*` skills (backend/configs/skill_main_*.md).
 
 AGENT_BOOTSTRAP_PROMPT = setting(
     "AGENT_BOOTSTRAP_PROMPT", "text",
     default=(Path(__file__).parent / "configs" / "agent_bootstrap_prompt.md").read_text(encoding="utf-8"),
-    validate=_validate_bootstrap_prompt,
     label="Agent system prompt",
-    help="The fixed head of every agent turn's system prompt, in every project; "
-         "the project's Persona and Rules follow it. "
-         f"{BOOTSTRAP_EMBED_TOKEN} must appear exactly once — it is replaced with "
-         "the editor's embed forms. A change applies on the next turn and resets "
-         "the model's prompt cache for every chat.",
+    help="The floor of every agent turn's system prompt, in every project: the rights "
+         "the agent acts with and what a landed change is. The base persona, the "
+         "project's Persona and its Rules follow it. A change applies on the next turn "
+         "and resets the model's prompt cache for every chat.",
+)
+
+AGENT_BASE_PERSONA_PROMPT = setting(
+    "AGENT_BASE_PERSONA_PROMPT", "text",
+    default=(Path(__file__).parent / "configs" / "agent_base_persona_prompt.md").read_text(encoding="utf-8"),
+    label="Agent base persona",
+    help="Who the agent is by default and what a turn is asking for; it follows the "
+         "floor and precedes the project's Persona and Rules. A persona whose settings "
+         "say `base_prompt: false` drops it and defines its role itself. A change "
+         "applies on the next turn and resets the model's prompt cache for every chat.",
 )
 
 
@@ -644,9 +649,9 @@ EMBEDDING_API_KEY = setting(
     label="Embedding API key",
     help="Embedding provider key; empty = fall back to the AI API base key.",
 )  # Embedding API key; falls back to AI_API_KEY
-# WHY: a model change moves the three absolute cosine cuts WITH it, in the
-# same commit — RETRIEVAL_MIN_SCORE, MEMORY_MERGE_CANDIDATE_MIN_SCORE,
-# MEMORY_DUPLICATE_FACT_THRESHOLD. Why: each is a point on THIS model's score
+# WHY: a model change moves the four absolute cosine cuts WITH it, in the
+# same commit — RETRIEVAL_MIN_SCORE, CHAT_RECALL_AUTO_MIN_SCORE,
+# MEMORY_MERGE_CANDIDATE_MIN_SCORE, MEMORY_DUPLICATE_FACT_THRESHOLD. Why: each is a point on THIS model's score
 # distribution, not a property of the corpus, and the distributions are SHAPED
 # differently: giga/480m's background scores sit lower than qwen3/600m's (fact-vs-fact
 # null median 0.601 -> 0.464, retrieval hits likewise) while near-duplicate pairs score
@@ -761,6 +766,38 @@ RETRIEVAL_MIN_SCORE = setting(
          "stricter hits; too high and \"why/how\" questions return no sources "
          "at all. Re-calibrate whenever Embedding model changes.",
 )  # Minimum cosine similarity to include a hit
+# The cosine at or above which the persona auto-recall (chat_auto_recall.py)
+# quotes an earlier exchange nobody asked for. It acts ON TOP of
+# RETRIEVAL_MIN_SCORE, which _score_chunks already applies, so the effective floor
+# is never below it — the value belongs to the embedding model like every row here.
+# WHY 0.32, not a cut between the sets: against embeddings/giga/480m, 25 hand-written
+# first messages over a 17-chat labelled corpus (scripts/chat-auto-recall-calib.py),
+# the sets OVERLAP. True matches scored 0.332–0.626 (median 0.41); non-matches
+# 0.182–0.444, nine of ten at or under 0.271; small talk that passed the word gate
+# 0.296 and 0.216. The one non-match above the true ones is a speech-act twin ("did we
+# order X and when is it delivered", X another object, 0.444): no floor that keeps
+# half the true matches stops it, so the floor is set for recall — all 10 true
+# matches kept, small talk out, ~0.02 of margin on both sides — and the block's
+# header tells the agent to ignore what does not fit. Operator ruling.
+# Known limit (gray drive, 2026-11-26): a greeting REPEATED verbatim from an
+# earlier chat scores 0.76 — no floor separates a repeated pleasantry from a
+# repeated subject. The word gate drops only exchanges under 4 words
+# (chat_auto_recall._subjects); the speech-act twin is the concept's next step.
+CHAT_RECALL_AUTO_MIN_SCORE = setting(
+    "CHAT_RECALL_AUTO_MIN_SCORE", float, default=0.32, min=0.0, max=1.0,
+    label="Auto-recall score floor",
+    help="A persona's auto-recall (chat_recall_budget) quotes an earlier exchange "
+         "only when its similarity to the user's message is at least this. It sits "
+         "on top of Retrieval score floor, never below it. Calibrated for "
+         "embeddings/giga/480m on a 25-message set: true matches scored 0.33–0.63, "
+         "unrelated subjects 0.18–0.44 (nine of ten at or under 0.27), small talk up "
+         "to 0.30. At 0.32 all 10 true matches are recalled, short small talk is not, and "
+         "one unrelated message that asks the same kind of thing about another "
+         "object is; a greeting repeated word for word from an earlier chat scores "
+         "as high as a true match and is recalled too. At 0.45 only 4 of 10 true "
+         "matches are recalled. Lower it for more recall, raise it for more silence. "
+         "Re-calibrate whenever Embedding model changes.",
+)
 # The cosine at or above which a `new` fact is refused as restating a stored one
 # (SYSTEM: memory, memory/dedup.py).
 # WHY: 0.82 is calibrated against embeddings/giga/480m and must be re-derived

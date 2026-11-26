@@ -179,6 +179,8 @@ def test_validate_definition_and_key_gates():
         "alpha — Lore Alpha, engineering (tools: mcp__alpha__*)\n"
         "beta — Lore Beta, sales (tools: mcp__beta__*)"
     )
+    # An on-demand server is the skill catalog's to advertise, not the prompt's.
+    assert mcp_servers.prompt_section([{"name": "lazy", "title": "L", "on_demand": True}]) == ""
 
     # The gateway advertises readOnlyHint from the registry's own `mutating`
     # declaration — an unannotated read tool would park on an approval card
@@ -487,6 +489,9 @@ async def test_key_flow_render_and_delete_cascades(
         "headers": {"Authorization": f"Bearer {TOKEN_VALUE}"},
         "secret_values": [TOKEN_VALUE],
         "auto_approve": False,
+        "on_demand": False,
+        "instructions": "",
+        "tool_names": [],
     }]
     assert _build_turn_payload(
         model="m", system_prompt="s", tools=[], agent_key="k", apply_mode="ask",

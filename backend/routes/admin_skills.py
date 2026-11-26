@@ -15,7 +15,12 @@ import logging
 import re
 import zipfile
 
-from agent_skills import frontmatter_name, shipped_skill_docs
+from agent_skills import (
+    MAIN_EDIT_SKILL,
+    embed_token_problem,
+    frontmatter_name,
+    shipped_skill_docs,
+)
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from surrealdb import AsyncSurreal
@@ -103,6 +108,23 @@ class SkillUpdate(BaseModel):
     enabled: bool | None = None
 
 
+def _refuse_broken_main_edit(name: str, content: str | None) -> None:
+    """422 when an instance row would serve a `main-edit` body the agent cannot
+    be taught embeds from (the INVARIANT at agent_skills.EMBED_SCHEMES_TOKEN).
+
+    # ARCH: both writers of an instance row call this — the PUT and the zip
+    # import — because either can override the shipped `main-edit`, and a
+    # check on one path would leave the other one able to freeze the embed
+    # grammar or drop it. The shipped file itself is checked where it is read
+    # (agent_skills.shipped_skill_docs).
+    """
+    if name != MAIN_EDIT_SKILL or content is None:
+        return
+    problem = embed_token_problem(content)
+    if problem:
+        raise HTTPException(status_code=422, detail=problem)
+
+
 def _resolved_fields(
     name: str, body: SkillUpdate, row: dict | None, shipped: dict[str, str],
 ) -> tuple[str | None, bool]:
@@ -113,6 +135,7 @@ def _resolved_fields(
       would be unreachable.
     * a contentless result must be a TOMBSTONE: enabled contentless rows serve
       nothing, and one over no shipped skill suppresses nothing either.
+    * an ENABLED `main-edit` must carry the embed-scheme token exactly once.
 
     `shipped` is the caller's `_shipped_bodies_by_name()` — the route reads it
     ONCE and serves both the validation and the response row off that read."""
@@ -146,6 +169,8 @@ def _resolved_fields(
                 status_code=422,
                 detail=f"{name}: nothing to suppress — no shipped skill of that name",
             )
+    if enabled:
+        _refuse_broken_main_edit(name, content)
     return content, enabled
 
 
@@ -271,6 +296,7 @@ async def import_skill_archive(
     if len(raw) > ARCHIVE_MAX_BYTES:
         raise HTTPException(422, f"archive is over {ARCHIVE_MAX_BYTES} bytes")
     name, content, files, skipped = _parse_skill_archive(raw)
+    _refuse_broken_main_edit(name, content)
     await db.query(
         "UPSERT type::record('instance_skills', $name) SET "
         "name = $name, content = $content, files = $files, enabled = true, "

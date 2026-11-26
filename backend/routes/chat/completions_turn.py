@@ -412,26 +412,48 @@ class AgentTurnPlan:
     # field is named `skills`. A real dict, not a tuple
     # default: a mutable-dict field must not alias a shared tuple.
     skill_docs: dict = field(default_factory=dict)
-    # Skill names the session's persona preloads (its frontmatter `skills`):
-    # the plugin activates each one that resolves in the catalog and injects
-    # its body as a `lore-preload` context message — see ARCH in
-    # harness-driver/plugin/src/preload.ts. Never a system-prompt edit.
+    # Skill names or masks the session's persona preloads (its frontmatter
+    # `skills`): the plugin activates each one that resolves in the catalog and
+    # injects its body as a `lore-preload` context message — see ARCH in
+    # harness-driver/plugin/src/preload.ts. Never a system-prompt edit. The
+    # default `main-*` mask is appended here by the caller
+    # (completions_harness._preload_default_skills) — ONE owner.
     preload_skills: list[str] = field(default_factory=list)
+    # The persona's skill visibility (its frontmatter `allow` / `deny`): names
+    # or prefix masks, sent RAW — the plugin expands them against the catalog
+    # it resolves (persona_settings.py ARCH). Empty `allow` = everything.
+    skill_allow: list[str] = field(default_factory=list)
+    skill_deny: list[str] = field(default_factory=list)
+    # False = the default `main-*` skills are not preloaded for this persona;
+    # they stay visible and the agent loads them when a request needs them.
+    preload_defaults: bool = True
     # The persona's chat-memory token budget (0 = memory off) — the input the
     # memory block is built from.
     chat_memory_budget: int = 0
+    # The persona's auto-recall token budget (0 = off) — the input the recall
+    # block is built from; it runs only while memory is on.
+    chat_recall_budget: int = 0
     # The persona's memory-block order ("recent" | "document").
     chat_memory_order: str = "recent"
     # Why the persona's memory is off although asked for (PersonaSettings.memory_error).
     memory_error: str | None = None
     # A bad `chat_memory_order` — memory stays on with "recent"; relayed as a turn warning.
     memory_order_warning: str | None = None
+    # Why the persona's auto-recall is off although asked for
+    # (PersonaSettings.recall_error); relayed as a turn warning.
+    recall_warning: str | None = None
     # The memory record to store on the chat row once the send is accepted
     # (chat_sessions.memory); None = nothing to record this turn.
     memory_record: dict | None = None
+    # The recall record for the same moment (chat_sessions.recall); written
+    # only with hits.
+    recall_record: dict | None = None
     # The persona's chat-memory block ("" = none this turn); the plugin injects
     # it as a `lore-memory` context message under the same log-scan rule.
     memory_block: str = ""
+    # The persona's auto-recall block ("" = none this turn); the plugin injects
+    # it as a `lore-recall` context message beside the memory one.
+    recall_block: str = ""
 
 
 # ARCH: turn-varying blocks are APPENDED to the base, never prepended — the
@@ -520,12 +542,9 @@ async def prepare_agent_turn(
 ) -> AgentTurnPlan:
     """Assemble the Agent-turn inputs: the agent system prompt (base +
     current-document section), the resolved apply-mode, the
-    OpenAI-format conversation, and the toolset.
-
-    Kept out of the turn transport so the route is a thin `prepare → hand off`
-    pair and the prompt assembly is unit-testable
-    without a live driver.
-    """
+    OpenAI-format conversation, and the toolset. Kept out of the turn
+    transport so the route is a thin `prepare → hand off` pair and the prompt
+    assembly is unit-testable without a live driver."""
     base_prompt, skill_docs, persona = await build_prompt_and_skill_docs(
         project_id, selected_persona_id=session.get("system_prompt_id"),
     )
@@ -545,14 +564,17 @@ async def prepare_agent_turn(
         apply_mode=apply_mode,
         tools=toolset,
         prompt=await _build_turn_prompt(body=body, vision_ok=vision_ok),
-        time_stamps=await _resolve_turn_time_stamps(
-            session=session, body=body, user=user,
-        ),
+        time_stamps=await _resolve_turn_time_stamps(session=session, body=body, user=user),
         skill_docs=skill_docs,
         preload_skills=list(persona.skills),
+        skill_allow=list(persona.skill_allow),
+        skill_deny=list(persona.skill_deny),
+        preload_defaults=persona.preload_defaults,
         chat_memory_budget=persona.chat_memory_budget,
         chat_memory_order=persona.chat_memory_order,
+        chat_recall_budget=persona.chat_recall_budget,
         memory_error=persona.memory_error,
         memory_order_warning=next(
             (w for w in persona.warnings if w.startswith("chat_memory_order")), None),
+        recall_warning=persona.recall_error,
     )

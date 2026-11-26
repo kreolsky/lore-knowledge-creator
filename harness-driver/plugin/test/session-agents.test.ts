@@ -125,7 +125,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     selection: { provider: 'mock', model: 'm1' },
     systemPrompt: 'SYSTEM one',
     timeStamps: [],
-    servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', memoryPersona: '',
+    servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', recallBlock: '', memoryPersona: '',
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(), perCallApproval: new Set(),
      

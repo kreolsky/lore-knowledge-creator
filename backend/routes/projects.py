@@ -50,15 +50,19 @@ async def _enrich_projects(db: AsyncSurreal, projects: list[dict], user: dict, m
     """Add my_access, is_owner_like, last_accessed_doc_id, and owner_name to each project dict.
 
     `is_owner_like` is DERIVED from the already-fetched `member_access` map —
-    owner, or an admin with a member row — never by calling is_project_root per
+    owner, or an elevated caller (admin, or the owner's group moderator) with a
+    member row — never by calling is_project_root per
     project (that would add N no-LIMIT membership queries on the dashboard).
     `my_access` mirrors get_project_access truthfully: owner → full; else the
-    MAX over member row (full for admins — elevated) and every audience row the
+    MAX over member row (full when elevated) and every audience row the
     caller's subjects match ('public' row → full for an admin); a private
     non-member project is NOT readonly (None).
     """
     uid = user["user_id"]
     is_admin = is_instance_admin(user)
+    # WHY: mirror of access._is_elevated_for without a per-project owner fetch —
+    # a moderator's group is read ONCE per list.
+    group_uids = set(await group_member_ids(db, uid)) if user.get("role") == "moderator" else set()
     # The caller's grant subjects, read ONCE per list and only when some project
     # in the page carries an audience row (mirrors the lazy branch in
     # get_project_access — audience-less pages pay nothing).
@@ -67,12 +71,13 @@ async def _enrich_projects(db: AsyncSurreal, projects: list[dict], user: dict, m
         audience_subjects = set(await user_subjects(db, uid))
     for p in projects:
         pid = p["project_id"]
+        elevated = is_admin or p.get("owner_id") in group_uids
         if p.get("owner_id") == uid:
             p["my_access"] = "full"
         else:
             levels: list[str | None] = []
             if pid in member_access:
-                levels.append("full" if is_admin else member_access[pid])
+                levels.append("full" if elevated else member_access[pid])
             if audience_subjects is not None:
                 # mirror of get_project_access's audience loop: MAX over every
                 # matching row; a 'public' row tops an admin up to full
@@ -87,7 +92,7 @@ async def _enrich_projects(db: AsyncSurreal, projects: list[dict], user: dict, m
         # INVARIANT(security): the payload carries a capability flag, never the
         # instance role. Why: the frontend must not branch on `role` in TSX; a
         # future moderator role changes this predicate in ONE backend place.
-        p["is_owner_like"] = p.get("owner_id") == uid or (is_admin and pid in member_access)
+        p["is_owner_like"] = p.get("owner_id") == uid or (elevated and pid in member_access)
         if p.get("owner_id") == uid:
             # owner: keep projects.last_accessed_doc_id from SELECT * (set in documents.get_document)
             pass

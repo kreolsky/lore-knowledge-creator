@@ -277,6 +277,8 @@ export interface AdminMcpServer {
   enabled: boolean;
   /** Every tool of the server runs with no approval card. */
   auto_approve: boolean;
+  /** The server rides a chat only after the agent loads its `mcp-<name>` skill. */
+  on_demand: boolean;
   /** Write-only shared key: the API answers these two states, never a value. */
   shared_key_set: boolean;
   /** The url moved to another host, stranding the stored key. */
@@ -298,6 +300,7 @@ export interface AdminMcpServerBody {
   subjects?: string[];
   enabled?: boolean;
   auto_approve?: boolean;
+  on_demand?: boolean;
 }
 
 export async function listAdminMcpServers(): Promise<AdminMcpServer[]> {

@@ -20,6 +20,7 @@ vi.mock('./streaming', () => ({
   markHarnessTurnAborted: vi.fn(),
   rememberQueuedSend: vi.fn(),
   forgetQueuedSend: vi.fn(),
+  applyReplyRecords: vi.fn(),
 }));
 // Mutable app-store state so individual tests can set the open document
 // (currentReference / currentDocument) that runCompletion reads at send time.

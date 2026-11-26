@@ -21,16 +21,18 @@ import {
   type Gateway, type ModelApi,
 } from './caps.ts'
 import { parseTimeStamps } from './time-stamps.ts'
-import { parseMemoryBlock, parseMemoryPersona, parsePreloadNames, resolvePreloads } from './preload.ts'
-import { parseMcpServers } from './mcp-servers.ts'
+import { parseBlock, parseMemoryPersona, parsePreloadNames, resolvePreloads } from './preload.ts'
+import { parseMcpServers, visibleMcpServers, withMcpSkills } from './mcp-servers.ts'
 import type { EventsChannel, SessionEventTap } from './ws-events.ts'
 import {
-  assembleTurnPrompt, catalogServedNames, computeCoreTools, computeActiveTools,
-  disabledPackTools, resolveSkillCatalog, skillsDelta, type ResolvedSkill, type SkillCatalogWire,
+  assembleTurnPrompt, catalogServedNames, computeActiveTools, computeCoreTools,
+  disabledPackTools, parseSkillEntries, resolveSkillCatalog, skillsDelta,
+  splitVisibleSkills, withheldPackTools, type SkillCatalogWire,
 } from './skills.ts'
 import { registerLoreTools } from './tools.ts'
 import {
   AGENT_KEY_REF, ROUTE_DEFAULT_CONTEXT_WINDOW, ROUTE_DEFAULT_MAX_TOKENS, REQUEST_IMAGE_MAX_BYTES, PROVIDER,
+  ROUTE_RETRY_POLICY,
   ensureAgentKey, ensureModelEntry, ensureTitleConfig, ensureTitleEntry, ensureWebSearch,
   type ConfigEditorSeam, type CredentialsSeam, type LoreRouteScaffold, type SettingsSeam,
 } from './ensure.ts'
@@ -163,6 +165,7 @@ export function loreRoute(baseURL: string): LoreRouteScaffold | null {
     },
     defaultContextWindow: ROUTE_DEFAULT_CONTEXT_WINDOW,
     defaultMaxTokens: ROUTE_DEFAULT_MAX_TOKENS,
+    retryPolicy: ROUTE_RETRY_POLICY,
   }
 }
 
@@ -187,6 +190,7 @@ export function anthropicRoute(baseURL: string): LoreRouteScaffold | null {
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
     defaultContextWindow: ROUTE_DEFAULT_CONTEXT_WINDOW,
     defaultMaxTokens: ROUTE_DEFAULT_MAX_TOKENS,
+    retryPolicy: ROUTE_RETRY_POLICY,
   }
 }
 
@@ -400,21 +404,46 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     (Array.isArray(body.tools) ? body.tools : [])
       .map((e: any) => String(e?.function?.name ?? '')),
   )
-  const skills: ResolvedSkill[] = resolveSkillCatalog(
-    catalogWire, catalogServedNames(payloadNames))
-  // A disabled skill's pack leaves the served set (INVARIANT in
-  // disabledPackTools): no core, no load, denied like any unserved proxy.
-  const withheld = disabledPackTools(catalogWire, skills)
+  // The on-demand MCP servers join the catalog as skills BEFORE the visible
+  // set is split, so a chat that loaded one gets it back from its own log and
+  // a persona's allow/deny reaches it like any skill.
+  const catalog = withMcpSkills(
+    resolveSkillCatalog(catalogWire, catalogServedNames(payloadNames)),
+    parseMcpServers(body))
+  // The persona's visible set (skills.ts splitVisibleSkills): ONE set drives
+  // the catalog the provider lists, the preloads, the restored activations and
+  // the withheld packs. A hidden skill is not in `skills`, so the model cannot
+  // load it; its pack tools are withheld below like a disabled skill's.
+  const { visible, hidden } = splitVisibleSkills(
+    catalog.skills, parseSkillEntries(body.skill_allow), parseSkillEntries(body.skill_deny))
+  const skills = visible
+  if (hidden.length) {
+    console.error(`[lore-skills] hidden by the persona — ${
+      hidden.map(({ skill, reason }) => `${skill.name} (${reason})`).join(', ')}`)
+  }
+  // A disabled OR hidden skill's pack leaves the served set (INVARIANT in
+  // skills.ts withheldPackTools): no core, no load, denied like any unserved
+  // proxy — a tool another visible skill also lists stays.
+  const withheld = new Set([
+    ...disabledPackTools(catalogWire, skills),
+    ...withheldPackTools(hidden.map((h) => h.skill), skills),
+  ])
   const servedNames = new Set([...payloadNames].filter((n) => !withheld.has(n)))
   if (withheld.size) {
-    console.error(`[lore-skills] disabled packs withheld: ${[...withheld].sort().join(',')}`)
+    console.error(`[lore-skills] packs withheld: ${[...withheld].sort().join(',')}`)
   }
+  // An on-demand server is a skill until loaded (mcp-servers.ts ARCH): hiding
+  // that skill hides the server — it leaves the prep's list, and syncMcpServers
+  // disposes at the claim whatever mount an earlier persona of this chat left.
+  const visibleNames = new Set(skills.map((s) => s.name))
+  const mcpServers = visibleMcpServers(catalog.servers, visibleNames)
   const activated = await restoreActivation(ctx, dshId, skills)
-  // The persona's preloaded skills (see ARCH in preload.ts): each name that
-  // resolves in THIS catalog is activated before the active set is computed,
-  // so its pack tools are callable from the first step; its body enters as
-  // the setup's `lore-preload` context message. Unresolved ⇒ logged, skipped.
-  const preloads = resolvePreloads(parsePreloadNames(body.preload_skills), skills)
+  // The persona's preloaded skills (see ARCH in preload.ts): each name or mask
+  // that resolves in THIS catalog is activated before the active set is
+  // computed, so its pack tools are callable from the first step; its body
+  // enters as the setup's `lore-preload` context message. An entry that
+  // resolves to nothing is logged (unknown, or hidden by the persona) and skipped.
+  const preloads = resolvePreloads(parsePreloadNames(body.preload_skills), skills, hidden)
   for (const skill of preloads) activated.add(skill.name)
   const coreNames = computeCoreTools(servedNames, skills)
   // ONE active formula, shared with restrictDenyNames (the INVARIANT there):
@@ -455,9 +484,10 @@ async function buildTurnPrep(ctx: Context, map: SessionMap, body: Record<string,
     loreId, model, cap, selection,
     systemPrompt: assembleTurnPrompt(body.system_prompt),
     timeStamps, servedNames, skills, activated, standingCtx, requestCtx,
-    preloads, memoryBlock: parseMemoryBlock(body.memory_block),
+    preloads, memoryBlock: parseBlock(body.memory_block),
+    recallBlock: parseBlock(body.recall_block),
     memoryPersona: parseMemoryPersona(body.memory_persona),
-    mcpServers: parseMcpServers(body),
+    mcpServers,
     claim: {
       user_msg_id: String(body.user_msg_id ?? ''),
       assistant_msg_id: requestCtx.messageId,

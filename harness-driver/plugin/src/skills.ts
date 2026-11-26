@@ -216,33 +216,117 @@ export function resolveSkillCatalog(
 }
 
 /**
- * The pack tools of the admin-disabled SHIPPED skills that NO resolved
- * (enabled) skill also lists — withheld from the served set, so they are neither core
- * nor loadable. Only shipped skills are covered: a disabled instance-only
- * skill never reaches the wire, so its exclusive tools are not withheld
- * here. A tombstone names a shipped skill; a live project or instance
- * copy of the same name overrides it (the overlay) and disables nothing.
+ * The pack tools of the HIDDEN skills that NO visible skill also lists —
+ * withheld from the served set, so they are neither core nor callable.
+ * One rule for every reason a skill can be absent from the catalog: the
+ * admin disabled it (disabledPackTools) or the persona hides it
+ * (splitVisibleSkills).
  *
- * INVARIANT(security): a disabled SHIPPED skill's tools are not callable — the
- * caller removes these names from the served set before core/active/deny.
+ * INVARIANT(security): an absent skill's tools are not callable — the caller
+ * removes these names from the served set before core/active/deny.
  * Why: dropping only the skill from the catalog lands its pack tools in the
- * always-active core (core = served minus the ENABLED packs), so "disabled"
- * would expose more than "enabled"; disabled means the agent neither sees
- * nor uses the tools.
+ * always-active core (core = served minus the VISIBLE packs), so "hidden"
+ * would expose more than "visible"; hidden means the agent neither sees nor
+ * uses the tools. A tool another visible skill also lists stays: it is reached
+ * through that skill, and its instructions travel with it.
+ */
+export function withheldPackTools(
+  hidden: readonly ResolvedSkill[], visible: readonly ResolvedSkill[],
+): Set<string> {
+  const visibleTools = new Set(visible.flatMap((s) => s.tools))
+  const out = new Set<string>()
+  for (const s of hidden) {
+    for (const t of s.tools ?? []) if (!visibleTools.has(t)) out.add(t)
+  }
+  return out
+}
+
+/**
+ * The pack tools of the admin-disabled SHIPPED skills that NO resolved
+ * (enabled) skill also lists — withheld from the served set (the rule and
+ * its INVARIANT live in withheldPackTools). Only shipped skills are
+ * covered: a disabled instance-only skill never reaches the wire, so its
+ * exclusive tools are not withheld here. A tombstone names a shipped skill; a
+ * live project or instance copy of the same name overrides it (the overlay)
+ * and disables nothing.
  */
 export function disabledPackTools(
   wire: SkillCatalogWire, skills: ResolvedSkill[],
 ): Set<string> {
   const tombstones = new Set((wire.instance_tombstones ?? []).map((n) => String(n ?? '')))
   const enabled = new Set(skills.map((s) => s.name))
-  const enabledTools = new Set(skills.flatMap((s) => s.tools))
-  const out = new Set<string>()
+  const disabled: ResolvedSkill[] = []
   for (const doc of wire.shipped ?? []) {
     const parsed = parseSkillDoc(doc?.content)
     if (!parsed || !tombstones.has(parsed.name) || enabled.has(parsed.name)) continue
-    for (const t of parsed.tools) if (!enabledTools.has(t)) out.add(t)
+    disabled.push({ ...parsed, location: String(doc.location ?? ''), child_docs: [] })
   }
-  return out
+  return withheldPackTools(disabled, skills)
+}
+
+/**
+ * One entry of the persona's `skills` / `allow` / `deny` lists (the payload's
+ * `preload_skills`, `skill_allow`, `skill_deny`): an exact skill name, or a
+ * PREFIX mask written with a TRAILING `*` — `main-*` names every skill whose
+ * name starts with `main-`, and `*` alone names every skill. Nothing else is
+ * a mask: `a*b` is a (non-matching) name.
+ *
+ * WHY the backend carries the same rule for ONE name
+ * (backend/persona_settings.py skill_entry_matches): the plugin owns the
+ * catalog, so masks expand only here — but chat-recall's memory gate has to
+ * be decided before the turn leaves. The two agree; change both.
+ */
+export function skillEntryMatches(name: string, entry: string): boolean {
+  return entry.endsWith('*') ? name.startsWith(entry.slice(0, -1)) : name === entry
+}
+
+/** The payload's `skill_allow` / `skill_deny`: non-empty strings, deduplicated
+ * in order. Anything else degrades to [] — a malformed field is no reason to
+ * fail a turn. */
+export function parseSkillEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const entries = value.filter((s): s is string => typeof s === 'string' && s !== '')
+  return [...new Set(entries)]
+}
+
+/** A catalog skill the persona hides, and why: `deny <entry>` (the entry that
+ * named it) or `outside allow`. */
+export interface HiddenSkill { skill: ResolvedSkill; reason: string }
+
+/**
+ * The persona's VISIBLE set — ONE set drives everything the turn does with a
+ * skill: the catalog the provider lists (so the model cannot load the rest),
+ * the preloads, the restored activations and the withheld pack tools.
+ *
+ * Visible = (allow absent ? the whole catalog : names matching allow) minus
+ * names matching deny. Precedence, one order for every name:
+ * deny > allow > skills — a name that matches both an allow and a deny entry,
+ * by exact name or by mask, is hidden: a ban always beats a permission.
+ * `skills` (the preloads) never widens the visible set — a preload outside it
+ * is skipped (resolvePreloads logs why).
+ *
+ * # ARCH: masks expand HERE, against the RESOLVED catalog — the backend sends
+ * the raw lists and parses no skill document (agent_config.py
+ * build_prompt_and_skill_docs). Why: which skills exist is known only after
+ * the overlay, the admin off-switch and the served gate ran, and all three
+ * run on the pinned harness's grammar in this module.
+ */
+export function splitVisibleSkills(
+  skills: readonly ResolvedSkill[], allow: readonly string[], deny: readonly string[],
+): { visible: ResolvedSkill[]; hidden: HiddenSkill[] } {
+  const visible: ResolvedSkill[] = []
+  const hidden: HiddenSkill[] = []
+  for (const skill of skills) {
+    const ban = deny.find((entry) => skillEntryMatches(skill.name, entry))
+    if (ban !== undefined) {
+      hidden.push({ skill, reason: `deny ${ban}` })
+    } else if (allow.length && !allow.some((entry) => skillEntryMatches(skill.name, entry))) {
+      hidden.push({ skill, reason: 'outside allow' })
+    } else {
+      visible.push(skill)
+    }
+  }
+  return { visible, hidden }
 }
 
 /**
@@ -342,7 +426,13 @@ export function catalogServedNames(servedNames: Set<string>): Set<string> {
 
 /** The always-active CORE set: every served tool EXCEPT the union of all
  * SERVED skill pack tools (an unserved pack tool is not pruned — it is not
- * served anyway). Order-preserving. */
+ * served anyway). Order-preserving.
+ *
+ * Empty BY DESIGN: every Lore tool belongs to a skill — the document tools to
+ * the shipped `main-*` skills, preloaded by default (backend/agent_skills.py
+ * ARCH). The `active tools resolved` log counts `core`, and anything above 0
+ * is a served tool whose instructions travel nowhere: callable from the first
+ * step, taught by its description alone. */
 export function computeCoreTools(servedNames: Set<string>, skills: ResolvedSkill[]): string[] {
   const packNames = new Set<string>()
   for (const s of skills) {

@@ -141,7 +141,8 @@ async def test_turn_end_stamps_the_dsh_session_beside_the_seq(client, test_db, p
 def test_build_turn_payload_carries_time_stamps():
     """The turn contract carries the stamp lines as their OWN field — `prompt`
     is the raw user content and the plugin emits the stamps as a separate
-    `lore-time` context message, never inside the user's text."""
+    `lore-time` context message, never inside the user's text — and the
+    persona's skill lists as their own fields, raw."""
     payload = _build_turn_payload(
         model="m", system_prompt="s", tools=[],
         agent_key="lore_x", apply_mode="confirm",
@@ -149,11 +150,16 @@ def test_build_turn_payload_carries_time_stamps():
             "[chat started 2026-08-31T18:05:00+03:00]",
             "[sent 2026-09-01T23:14:05+03:00]",
         ],
+        preload_skills=["web-search", "main-*"], skill_allow=["main-*"], skill_deny=["main-edit"],
     )
     assert payload["time_stamps"] == [
         "[chat started 2026-08-31T18:05:00+03:00]",
         "[sent 2026-09-01T23:14:05+03:00]",
     ]
+    # The persona's skill lists ride RAW — names or masks, the plugin expands
+    # them against the catalog it resolves (never the backend).
+    assert payload["preload_skills"] == ["web-search", "main-*"]
+    assert (payload["skill_allow"], payload["skill_deny"]) == (["main-*"], ["main-edit"])
     # Absent stamps degrade to [] (an unconditional key, never a missing field
     # the plugin has to probe for).
     empty = _build_turn_payload(
@@ -161,6 +167,7 @@ def test_build_turn_payload_carries_time_stamps():
         agent_key="lore_x", apply_mode="confirm",
     )
     assert empty["time_stamps"] == []
+    assert (empty["preload_skills"], empty["skill_allow"], empty["skill_deny"]) == ([], [], [])
 
 
 # ─── agent_capability (configured-or-not — NO probe, plan collapse step 2) ───

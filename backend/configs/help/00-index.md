@@ -29,18 +29,19 @@ What the guide does not describe and the "Planned" list does not mention is most
 - [Skills](help:skills) — creating skills, built-in skills.
 - [Personas and rules](help:personas-rules-knowledge) — the Agent System section.
 - [Memory](help:memory) — project facts, consolidation, saving facts from a chat.
-- [Pipelines](help:pipelines) — the extractor and theme digests.
+- [Pipelines](help:pipelines) — the extractor and theme digests, managing them through the agent.
 - [Search](help:search) — documents, memory, your chats, find and replace (table cells included).
 - [Access and publishing](help:access) — members, group access, public links and comments, link previews, privacy, account tiers, API keys, arrival notifications, moving between projects.
 - [HTML pages](help:html-pages) — interactive pages the agent builds: viewing, source, publishing, download, fullscreen, rewriting in place.
 - [Screen and page lock](help:pin-lock) — locking the screen, hiding single pages behind your PIN.
 - [Profile settings](help:profile) — profile and PIN, MCP server keys, personal API keys, theme colors, the notification sound.
 - [External agent (MCP)](help:external-agent) — connecting Claude Code or another MCP client with an API key: scope, rights, what it can and cannot do, undo, limits.
+- [Tasks](help:tasks) — task documents and their schema, the agent's work loop, questions, drafts, reserving a task for an agent, closing.
 
 ## Planned
 
 Not available in the interface yet:
 
-- scheduling pipeline runs (the scheduler exists; there is no setting in the interface);
+- a setting for scheduled pipeline runs (for now, ask the agent to set or pause a digest's schedule);
 - new pipeline kinds, and pipelines the agent assembles itself;
 - comparing two snapshots with the differences highlighted in the interface (for now: open them one after another, or ask the agent to compare them).

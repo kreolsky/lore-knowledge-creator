@@ -38,7 +38,8 @@ import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-j
 import { createSessionEventTap } from '../src/ws-events.ts'
 import { loreTurnCtxFor } from '../src/tools.ts'
 import { registerLoreApprovalBridge, resolveVerdict, resetLoreApprovalBridgeForTest } from '../src/approvals.ts'
-import { MCP_MOUNT_WAIT_MS } from '../src/mcp-servers.ts'
+import { MCP_MOUNT_WAIT_MS, mountOnDemand, visibleMcpServers, withMcpSkills } from '../src/mcp-servers.ts'
+import { splitVisibleSkills } from '../src/skills.ts'
 
 process.env.LORE_DRIVER_SECRET ||= 't3st-s3cr3t'
 const { resumeOrCreate } = await import('../src/sessions.ts')
@@ -236,7 +237,7 @@ function prep(text: string, over: Partial<TurnPrep> = {}): TurnPrep {
     loreId: 'lore-x', model: 'm1', cap: 0,
     selection: { provider: 'mock', model: 'm1' },
     systemPrompt: 'SYSTEM one',
-    timeStamps: [], servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', memoryPersona: '',
+    timeStamps: [], servedNames: new Set(), skills: [], activated: new Set(), preloads: [], memoryBlock: '', recallBlock: '', memoryPersona: '',
     mcpServers: [],
     standingCtx: {
       loreSessionId: 'lore-x', agentKey: 'k', mutating: new Set(), holdable: new Set(),
@@ -258,6 +259,7 @@ function mcpServer(fixtureUrl: string, token: string, autoApprove = false): impo
     name: 'spike', url: fixtureUrl, title: 'Spike fixture',
     headers: { Authorization: `Bearer ${token}` },
     secret_values: [token], auto_approve: autoApprove,
+    on_demand: false, instructions: '', tool_names: [],
   }
 }
 
@@ -498,6 +500,29 @@ test('the scrub replaces a secret echoed in results and error results alike', as
   }
 })
 
+// TEST-WHY: cross-process-contract — an on-demand server on a real MCP fixture rides no request until its skill loads, and once loaded rides every later turn of the same chat
+test('an on-demand server mounts only after its skill loads, then stays for the chat', async () => {
+  const fixture = await startMcpFixture()
+  try {
+    const { skills, servers } = withMcpSkills([], [
+      { ...mcpServer(fixture.url, 'tok-LAZY'), on_demand: true, instructions: 'Spike data. Call get_x first.\n\nMore.' },
+    ])
+    assert.deepEqual(skills.map((s) => s.name), ['mcp-spike'])
+    assert.ok(skills[0].description.endsWith('Spike data.'), 'the first sentence of the server\'s instructions')
+    const h = await harness([{ text: 'one' }, { text: 'two' }])
+    await send(h, 's-lazy', 'one', prep('one', { skills, mcpServers: servers }))
+    await until(settled('s-lazy'), 'the first turn')
+    const mcpTools = (i: number) => [...toolNames(h.adapter.requests[i]!)].filter((n) => n.startsWith('mcp__'))
+    assert.deepEqual(mcpTools(0), [], 'not loaded: no tool of the server rides the request')
+    await mountOnDemand(sessionAgents.get('s-lazy') as any, 'mcp-spike')
+    await send(h, 's-lazy', 'two', prep('two', { skills, mcpServers: servers }))
+    await until(settled('s-lazy'), 'the second turn')
+    assert.ok(mcpTools(1).includes('mcp__spike__whoami'), 'loaded: the next turn carries its tools')
+  } finally {
+    await fixture.close()
+  }
+})
+
 test('a stalled server costs at most the mount bound and its tools are absent', async () => {
   const stall = createNetServer((socket) => { socket.resume() })
   const listening: PromiseWithResolvers<void> = Promise.withResolvers()
@@ -509,7 +534,8 @@ test('a stalled server costs at most the mount bound and its tools are absent', 
     const started = Date.now()
     await send(h, 's-stall', 'hello', prep('hello', {
       mcpServers: [{ name: 'stall', url: `http://127.0.0.1:${port}/mcp`, title: 'stall',
-        headers: { Authorization: 'Bearer tok-stall' }, secret_values: ['tok-stall'], auto_approve: false }],
+        headers: { Authorization: 'Bearer tok-stall' }, secret_values: ['tok-stall'], auto_approve: false,
+        on_demand: false, instructions: '', tool_names: [] }],
     }))
     await until(settled('s-stall'), 'the turn', MCP_MOUNT_WAIT_MS + 5000)
     assert.ok(Date.now() - started < MCP_MOUNT_WAIT_MS + 4000,
@@ -544,7 +570,8 @@ test('a cross-origin redirect drops Authorization on the way', async () => {
       const h = await harness([{ text: 'done' }])
       await send(h, 's-redir', 'via redirect', prep('via redirect', {
         mcpServers: [{ name: 'spike', url: `http://127.0.0.1:${port}/mcp`, title: 'spike',
-          headers: { Authorization: `Bearer ${token}` }, secret_values: [token], auto_approve: false }],
+          headers: { Authorization: `Bearer ${token}` }, secret_values: [token], auto_approve: false,
+          on_demand: false, instructions: '', tool_names: [] }],
       }))
       await until(settled('s-redir'), 'the turn')
       assert.ok(redirects.includes(`Bearer ${token}`), 'the first hop carried the header')
@@ -583,4 +610,20 @@ test('a second agent scope sees none of another agent\'s mounts', async () => {
   } finally {
     await fixture.close()
   }
+})
+
+// TEST-WHY: pure-logic-edge — a persona hides an on-demand server with its skill (outside allow, or by deny) while an eager server, which is no skill, stays; both masks and exact names must agree with the catalog's own visibility rule.
+test('a persona that hides the mcp-<server> skill hides the on-demand server; an eager one stays', () => {
+  const lazy = { ...mcpServer('http://127.0.0.1:1/mcp', 'tok-LAZY'), name: 'lazy', on_demand: true }
+  const eager = { ...mcpServer('http://127.0.0.1:1/mcp', 'tok-EAGER'), name: 'eager', on_demand: false }
+  const all = [lazy, eager]
+  const names = (out: typeof all) => out.map((s) => s.name)
+  assert.deepEqual(names(visibleMcpServers(all, new Set(['mcp-lazy', 'main-read']))), ['lazy', 'eager'])
+  // outside allow: the visible set carries no mcp-lazy.
+  assert.deepEqual(names(visibleMcpServers(all, new Set(['main-read']))), ['eager'])
+  // deny by mask, the same visible set as the catalog would compute.
+  const { visible } = splitVisibleSkills(
+    [{ name: 'mcp-lazy', description: 'd', tools: [], location: 'l', body: 'b', child_docs: [] }],
+    [], ['mcp-*'])
+  assert.deepEqual(names(visibleMcpServers(all, new Set(visible.map((s) => s.name)))), ['eager'])
 })

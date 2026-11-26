@@ -13,10 +13,11 @@ import assert from 'node:assert/strict'
 
 import {
   assembleTurnPrompt, catalogServedNames, computeActiveTools, computeCoreTools, disabledPackTools,
-  frameSkillBody,
+  frameSkillBody, parseSkillEntries,
   loreSkillProvider, LORE_SKILL_PROVIDER, parseSkillDoc, resolveSkillCatalog,
-  restrictDenyNames, restoreActivatedSkills, SKILL_FILES_SENTENCE, skillLoadCallName,
-  skillLoadResultName, skillsDelta, type ResolvedSkill,
+  restrictDenyNames, restoreActivatedSkills, SKILL_FILES_SENTENCE, skillEntryMatches,
+  skillLoadCallName, skillLoadResultName, skillsDelta, splitVisibleSkills, withheldPackTools,
+  type ResolvedSkill,
 } from '../src/skills.ts'
 
 function skill(name: string, tools: string[], location = `doc-${name}`): ResolvedSkill {
@@ -341,6 +342,87 @@ test('disabled skill: its pack is withheld from served, so neither core nor load
   const overridden = WIRE([{ location: 'p', content: doc('name: memory\ndescription: d\ntools:\n  - get_memory_facts\n') }],
     wire.shipped, [], ['memory'])
   assert.equal(disabledPackTools(overridden, resolveSkillCatalog(overridden, payload)).size, 0)
+})
+
+// ─── The persona's visible set: allow / deny masks (plan persona-skill-sets) ─
+
+const names = (skills: ResolvedSkill[]) => skills.map((s) => s.name)
+const MAIN = () => [
+  skill('main-read', ['read_document']), skill('main-edit', ['edit_document']),
+  skill('main-files', ['attach_file']), skill('main-config', ['save_skill']),
+]
+const REST = () => [
+  skill('tables', ['create_table']), skill('secrets', ['list_secrets']),
+]
+
+// TEST-WHY: pure-logic-edge — a list entry is an exact name or a prefix before a TRAILING star; every other spelling is a (non-matching) name, in the payload parser and in the matcher alike.
+test('a list entry is an exact name or a prefix before a trailing star', () => {
+  assert.ok(skillEntryMatches('main-read', 'main-read'))
+  assert.ok(skillEntryMatches('main-read', 'main-*'))
+  assert.ok(skillEntryMatches('web-search', '*'), 'a bare star names every skill')
+  assert.ok(!skillEntryMatches('main-read', 'main'), 'a prefix without the star is a name')
+  assert.ok(!skillEntryMatches('main-read', 'ma*in'), 'only a trailing star is a mask')
+  assert.ok(!skillEntryMatches('web-search', 'main-*'))
+  assert.deepEqual(parseSkillEntries(['main-*', 'main-read', 'main-*', '', 4, null]), ['main-*', 'main-read'])
+  assert.deepEqual(parseSkillEntries('main-*'), [], 'a malformed field is no reason to fail a turn')
+})
+
+// TEST-WHY: pure-logic-edge — no lists means the whole catalog; allow keeps only its matches and names the reason of every other one.
+test('no lists ⇒ the whole catalog; allow keeps its matches and hides the rest as outside allow', () => {
+  const all = [...MAIN(), ...REST()]
+  const open = splitVisibleSkills(all, [], [])
+  assert.deepEqual(names(open.visible), names(all))
+  assert.deepEqual(open.hidden, [])
+  const closed = splitVisibleSkills(all, ['main-*'], [])
+  assert.deepEqual(names(closed.visible), ['main-read', 'main-edit', 'main-files', 'main-config'])
+  assert.deepEqual(closed.hidden.map(({ skill: s, reason }) => [s.name, reason]),
+    [['tables', 'outside allow'], ['secrets', 'outside allow']])
+})
+
+// TEST-WHY: pure-logic-edge — deny beats allow for a name both reach, by exact name or by mask; one deny mask hides what several allow entries permit.
+test('deny > allow: a name both lists reach is hidden, and the reason names the deny entry', () => {
+  const both = splitVisibleSkills(MAIN(), ['main-*'], ['main-files'])
+  assert.deepEqual(names(both.visible), ['main-read', 'main-edit', 'main-config'])
+  assert.deepEqual(both.hidden.map(({ skill: s, reason }) => [s.name, reason]), [['main-files', 'deny main-files']])
+  const byMask = splitVisibleSkills(MAIN(), ['main-files', 'main-read'], ['main-f*'])
+  assert.deepEqual(names(byMask.visible), ['main-read'])
+  assert.deepEqual(byMask.hidden.map(({ skill: s, reason }) => [s.name, reason]), [
+    ['main-edit', 'outside allow'],
+    ['main-files', 'deny main-f*'],
+    ['main-config', 'outside allow'],
+  ], 'catalog order; the deny entry is named for what it hid, the rest fell outside allow')
+  const everything = splitVisibleSkills(REST(), ['tables', 'secrets'], ['*'])
+  assert.deepEqual(everything.visible, [])
+  assert.ok(everything.hidden.every(({ reason }) => reason === 'deny *'))
+})
+
+// TEST-WHY: refused-principal — a hidden skill's pack is withheld like a disabled one's (not core, not loadable), while a tool a visible skill also lists stays reachable.
+test('a hidden skill\'s pack is withheld; a tool a visible skill also lists stays', () => {
+  const { visible, hidden } = splitVisibleSkills([
+    skill('web-search', ['web_search', 'sandbox_bash']),
+    skill('sandbox', ['sandbox_bash', 'sandbox_view_image']),
+  ], [], ['sandbox'])
+  const withheld = withheldPackTools(hidden.map((h) => h.skill), visible)
+  assert.deepEqual([...withheld], ['sandbox_view_image'], 'sandbox_bash is reached through web-search')
+  // The turn's arithmetic with a closed persona: core stays 0, the hidden
+  // packs leave the served set, and nothing can activate them back.
+  const all = [...MAIN(), ...REST()]
+  const persona = splitVisibleSkills(all, ['main-*'], ['main-config'])
+  const payload = new Set([
+    'read_document', 'edit_document', 'attach_file', 'save_skill', 'create_table', 'list_secrets'])
+  const hiddenPacks = withheldPackTools(persona.hidden.map((h) => h.skill), persona.visible)
+  const served = new Set([...payload].filter((n) => !hiddenPacks.has(n)))
+  assert.deepEqual([...served].sort(), ['attach_file', 'edit_document', 'read_document'])
+  assert.deepEqual(computeCoreTools(served, persona.visible), [], 'the core stays empty')
+  // Forged activations of hidden skills lift nothing: a hidden pack's tools
+  // stay denied beside the visible-but-unactivated packs' own.
+  const deny = restrictDenyNames(payload, served, persona.visible, new Set(['tables', 'main-config']))
+  assert.deepEqual(deny, [
+    'attach_file', 'create_table', 'edit_document', 'list_secrets', 'read_document', 'save_skill'])
+  const live = restrictDenyNames(
+    payload, served, persona.visible, new Set(['main-read', 'main-edit', 'main-files', 'tables', 'main-config']))
+  assert.deepEqual(live, ['create_table', 'list_secrets', 'save_skill'],
+    'hidden tools stay denied even under a forged activation')
 })
 
 // ─── restrictDenyNames: the dsh served/inactive split ────────────────────────

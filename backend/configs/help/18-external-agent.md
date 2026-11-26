@@ -13,7 +13,7 @@ What the key decides:
 - **Scope** — the agent sees only this document and its subtree. Anything outside answers "access denied". To give it the whole project, create the key on the project's index document (the first row of the tree, named after the project): such a key sees every document except the Agent System and this guide. A system document (Agent System) cannot be a key's root.
 - **Identity** — the agent acts as you, the key's owner, and never exceeds your rights. If you lose access to the project, the key stops working.
 - **Writing** — read-only or read-write, set at creation.
-- **Who can create one** — a member with full (Editor) access to the project; on the index document, only the project owner.
+- **Who can create one** — a member with full (Editor) access to the project; on the index document, only a project root (see [Access and publishing](help:access)).
 - **Revoking** — delete the key in the same section; it stops working at once. Rename it to tell keys apart.
 
 ## Connecting
@@ -36,9 +36,11 @@ Other clients take the same two things — the URL and the header — in their o
 
 Without an MCP client, send `POST <Lore address>/mcp` — stateless JSON-RPC 2.0, one request per call — with the headers `Authorization: Bearer <token>`, `Content-Type: application/json` and `Accept: application/json`, and the body `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"init","arguments":{}}}`. The result is a JSON string in `result.content[0].text`. `"method":"tools/list"` lists the tools with their parameters.
 
+For scripts and coding agents there is also the console client `lore` (https://github.com/kreolsky/lore-knowledge-creator/tree/main/cli): plain Python with no dependencies, one command per step of the task loop, working over the same key; its `cli/README.md` lists the commands.
+
 ## The first call: init
 
-Tell the agent to call `init` once, first. It returns the agent's rights (read-only or read-write), its scope and the instructions for working over MCP. With a key created on the project's index document it also returns your project's rules in full, so the rules you wrote for the built-in agent (see [Personas and rules](help:personas-rules-knowledge)) apply to the external one too. A key on an ordinary document gets no rules: they belong to the whole project, and the key reads only that document and its subtree. Personas and the skills you wrote are not passed on to either key.
+Tell the agent to call `init` once, first. It returns the agent's rights (read-only or read-write), its scope and the instructions for working over MCP. With a key created on the project's index document it also returns your project's rules in full, so the rules you wrote for the built-in agent (see [Personas and rules](help:personas-rules-knowledge)) apply to the external one too. A key on an ordinary document gets no rules: they belong to the whole project, and the key reads only that document and its subtree. Personas and the skills you wrote are not passed on to either key. `init` also returns the built-in method for working [tasks](help:tasks); the agent reads it before it starts the task loop.
 
 ## What the agent can do
 
@@ -61,12 +63,17 @@ Writing (read-write key only):
 - uploading files — audio, images, .docx, Markdown (`attach_file`): the agent gets a short-lived link and sends the bytes to it itself; the text (transcript, markdown) appears asynchronously, as with an upload in the interface. A failed conversion is re-run with `reprocess_file`;
 - importing a zip of Markdown files (an Obsidian vault, an export) as a subtree (`import_subtree_md`): folders become documents, files in `_assets/` become references, tables become editable tables, links are re-linked.
 
+Tasks (see [Tasks](help:tasks)):
+
+- finding documents by the properties in their header (`find_documents`);
+- taking the next ready task, claiming it and moving it between statuses (`next_task`, `claim_task`, `set_task_status`).
+
 Uploading audio requires an account tier with voice (see [Access and publishing](help:access)).
 
 ## What it cannot do
 
 - Delete documents — that is the user's job.
-- Chat history, memory curation, saving skills, the sandbox console, image generation, web search and your personal keys — these belong to the built-in agent only.
+- Chat history, memory curation, saving skills, managing [pipelines](help:pipelines) (binding, running), the sandbox console, image generation, web search and your personal keys — these belong to the built-in agent only.
 - Read a page you locked with your PIN.
 - Wait for your approval: there is no confirmation step over MCP. On a read-write key every write applies at once.
 

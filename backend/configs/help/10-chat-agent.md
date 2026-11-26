@@ -69,3 +69,5 @@ To hide all chats of a document and its subtree at once, use "Hide this document
 ## External MCP servers
 
 The administrator (or your group's moderator) can connect outside MCP servers; their tools then appear in your chat, named after the server. Where a server needs your own key, paste it in [Profile settings](help:profile), "MCP" section. The agent prefers Lore's own tools for work on the project and uses a server's tools when the task is for that service or you name it.
+
+A server the administrator marks "Connect on demand" (badge "on demand") is not connected at the start of a chat. Instead the agent sees one skill, `mcp-<name>`, whose description is the server's own instructions — so after saving such a server the administrator presses "Check connection" to fetch them. The server connects when the agent loads that skill and stays connected for the rest of the chat. A persona that denies the skill keeps the server unconnected (see [Personas and rules](help:personas-rules-knowledge)). A server's name uses lowercase letters, digits and hyphens.

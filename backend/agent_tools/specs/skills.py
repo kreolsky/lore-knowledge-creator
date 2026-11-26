@@ -8,10 +8,14 @@ nothing (leaf), mirroring specs/memory.py.
 # MCP; see INVARIANT(security) in agent/apply_policy.py and the is_system
 # refusal cell in routes/tool_api/_common.py).
 # Always served: no external dependency to gate on (unlike sandbox_* /
-# web_search). CORE on purpose, not packed into the skill-authoring skill — a
-# model that skips the skill load still finds the tool by name and gets
-# server-assembled frontmatter; packed, it would fall back to create_document
-# and hand-written YAML the plugin silently skips.
+# web_search). Packed into `main-config` (backend/configs/
+# skill_main_config.md), one of the default skills — NOT into the prose-only
+# skill-authoring skill. Why: skill-authoring is loaded on demand, and a model
+# that skips that load must still find the tool by name and get
+# server-assembled frontmatter; without it the model falls back to
+# create_document and hand-written YAML the plugin silently skips. `main-config`
+# is active from the first step in every chat unless the persona's frontmatter
+# says otherwise (agent_skills.py ARCH: the core is empty).
 SAVE_SKILL_TOOL: dict = {
     "type": "function",
     "mutating": True,

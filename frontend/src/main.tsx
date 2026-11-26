@@ -13,6 +13,18 @@ import './index.css';
 installDomTranslateGuard();
 // A tab from before a deploy reloads instead of crashing on a chunk the server dropped.
 installStaleChunkReload();
+// WHY: the vendored dsh markdown bundle calls URL.canParse while rendering a link;
+// browsers before Chrome 120 / Safari 17 / Firefox 115 lack it and the page crashes.
+if (typeof URL.canParse !== 'function') {
+  URL.canParse = (url: string | URL, base?: string | URL): boolean => {
+    try {
+      new URL(url, base);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
 
 // Begin capturing main-thread freezes (telemetry perf producer). Idempotent; no-op
 // where PerformanceObserver/longtask is unsupported.

@@ -188,24 +188,31 @@ async def _copy_prefix(new_id: str, chain: list[dict]) -> dict[str, str]:
     return copies
 
 
-def _inherited_memory(session: dict, chain: list[dict], copies: dict[str, str]) -> dict | None:
-    """The source's memory record remapped onto the copies, or None when the
-    branch's log will not hold the block.
+# The chat row's block records a branch inherits (chat_sessions.memory,
+# chat_sessions.recall) — the same rule for each.
+_RECORD_FIELDS = ("memory", "recall")
+
+
+def _inherited_records(session: dict, chain: list[dict], copies: dict[str, str]) -> dict[str, dict]:
+    """The source's memory and recall records remapped onto the copies —
+    `{field: record}`, empty when the branch's log will hold none.
 
     WHY a completed turn after message_id is required: the fork seeds the log
     only up to the last completed turn (see ARCH in _branch_point), and the
     block sits after the user message inside that turn — a fork right after
-    message_id (re-generating the memory turn) or after an aborted memory turn
-    has no block, so its first turn must build one.
+    message_id (re-generating the block's turn) or after an aborted one has no
+    block, so its first turn must build one.
     """
-    record = session.get("memory")
-    if not record or record.get("message_id") not in copies:
-        return None
     ids = [str(extract_id(r["id"])) for r in chain]
-    after = chain[ids.index(record["message_id"]) + 1:]
-    if not any(r.get("driver_seq") is not None for r in after):
-        return None
-    return record | {"message_id": copies[record["message_id"]]}
+    out: dict[str, dict] = {}
+    for field in _RECORD_FIELDS:
+        record = session.get(field)
+        if not record or record.get("message_id") not in copies:
+            continue
+        after = chain[ids.index(record["message_id"]) + 1:]
+        if any(r.get("driver_seq") is not None for r in after):
+            out[field] = record | {"message_id": copies[record["message_id"]]}
+    return out
 
 
 @router.post("/sessions/{session_id}/branches", status_code=201)
@@ -244,11 +251,11 @@ async def create_branch(
     await create_record("chat_sessions", new_id, data)
     row = await inherit_conversation_fields(db, new_id, session_id)
     copies = await _copy_prefix(new_id, chain)
-    memory = _inherited_memory(session, chain, copies)
-    if memory is not None:
+    inherited = _inherited_records(session, chain, copies)
+    if inherited:
         row = (await db.query(
-            "UPDATE type::record('chat_sessions', $sid) SET memory = $m RETURN AFTER",
-            {"sid": new_id, "m": memory},
+            "UPDATE type::record('chat_sessions', $sid) MERGE $fields RETURN AFTER",
+            {"sid": new_id, "fields": inherited},
         ))[0]
     await schedule_chat_index(data["user_id"], data["project_id"])
 

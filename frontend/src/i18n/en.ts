@@ -559,6 +559,10 @@ export const en = {
   removeQueued: 'Remove queued message',
   chatSaveError: 'Response was not saved',
   chatContextWarning: 'Some context documents failed to load',
+  // Turn warnings of the persona's auto-recall, each with a text of its own:
+  // the generic one above reads as a document failure (chat-store/streaming.ts).
+  chatRecallFailed: 'The persona could not recall your earlier conversations — this answer is given without them',
+  chatRecallOffNotice: 'Auto-recall is off: {error}',
   chatStreamDegraded: 'Some stream content was lost',
   chatContextSummarized: 'Conversation context was summarized to free up space',
   chatCompactionArchiveFailed: 'The context was summarized, but the archived conversation could not be saved — the earlier transcript is not available',
@@ -671,6 +675,12 @@ export const en = {
   chatMemoryOffNotice: 'Persona memory is off: {error}',
   chatMemoryHidden: 'Not available: {count} more',
   chatMemoryLoadFailed: 'Could not load this chat\'s memory',
+  // The earlier conversations the persona recalled on its own (chat_sessions.recall).
+  chatRecallRow_one: 'Recalled: {count} past conversation',
+  chatRecallRow_few: 'Recalled: {count} past conversations',
+  chatRecallRow_many: 'Recalled: {count} past conversations',
+  chatRecallRow_other: 'Recalled: {count} past conversations',
+  chatRecallLoadFailed: 'Could not load the recalled conversations',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends
   // no effort and the provider's default applies; the rest are the model's
@@ -801,6 +811,9 @@ export const en = {
   adminMcpHelpUrlPlaceholder: 'where to get the key — https://…',
   adminMcpAutoApprove: 'Run without confirmation',
   adminMcpAutoApproveBadge: 'no confirmation',
+  adminMcpOnDemand: 'Connect on demand',
+  adminMcpOnDemandBadge: 'on demand',
+  adminMcpOnDemandHint: 'The agent sees one skill, mcp-<name>, instead of every tool; the server connects when the agent loads that skill and stays for the rest of the chat. The skill description comes from the server itself — press Check connection after saving. The name must be lowercase letters, digits and hyphens.',
   adminMcpAutoApproveHint: 'The agent calls every tool of this server without asking the user — including tools that change data. Only for trusted internal read-only servers.',
   adminMcpSharedReenterHint: 'the server address moved to another host — enter the key again',
   adminMcpAdvanced: 'Advanced',

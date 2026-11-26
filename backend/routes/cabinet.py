@@ -533,9 +533,10 @@ async def check_mcp_server(
     row = await _visible_mcp_server(db, user, server_id)
     try:
         headers = await mcp_servers.checkable_headers(db, row, user=user)
-        return await mcp_servers.check_connection(row.get("url") or "", headers)
+        verdict = await mcp_servers.check_connection(row.get("url") or "", headers)
     except mcp_servers.McpServerError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await mcp_servers.store_capture(db, server_id, verdict)
 
 
 @router.delete("/api/cabinet/mcp/{server_id}/secrets")

@@ -35,16 +35,24 @@ export function registerNoRetryAfterText(
 ): void {
   ctx.on('agent/request-error' as never, ((payload: any, next: () => Promise<unknown>) => {
     const session = payload?.agent?.session
+    // WHY a line per failure: a retried failure never reaches "turn failed",
+    // so without it a recovered MALFORMED_RESPONSE leaves no trace at all.
+    const where = `dsh=${String(session?.id ?? '')} turn=${payload?.turn} step=${payload?.step} code=${payload?.failure?.code}`
     // WHY chat turns only: a subagent's text never reaches the chat, so its
     // retry rewrites nothing the user saw and keeps its recovery value.
-    if (!ctxLookup(String(session?.id ?? ''))) return next()
+    if (!ctxLookup(String(session?.id ?? ''))) {
+      console.log(`[lore-driver] request error ${where} subagent → dsh recovery`)
+      return next()
+    }
     // INVARIANT: once the model has printed reply text, a stream failure ends
     // the turn — no retry from scratch; a failure before any text keeps dsh's retry.
     // Why: operator ruling — a retry rewrites the answer, so the printed text
     // and a different new variant pile up in the chat.
     if (attemptPrintedText(session, payload?.turn, payload?.step)) {
+      console.log(`[lore-driver] request error ${where} after reply text → no retry`)
       return Promise.resolve(undefined)
     }
+    console.log(`[lore-driver] request error ${where} → dsh recovery`)
     return next()
   }) as never, true)
 }

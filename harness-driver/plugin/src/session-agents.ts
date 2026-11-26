@@ -25,10 +25,13 @@ import { SessionHandleClosedError } from '@deepseek-ai/dsh-session-persistence'
 
 import { turnFailureLine } from './map.ts'
 import { timeStampMessage } from './time-stamps.ts'
-import { logInjected, logSwapped, memoryAction, preloadMessages, surfaceMemoryNodes } from './preload.ts'
+import {
+  MEMORY_KIND, MEMORY_OFF_NOTE, RECALL_KIND, RECALL_OFF_NOTE,
+  logInjected, logSwapped, memoryAction, preloadMessages, surfaceMemoryNodes,
+} from './preload.ts'
 import { childSessions, type EventsChannel, type SessionEventTap } from './ws-events.ts'
 import {
-  disposeMcpServers, installMcpSeam, mountAhead, syncMcpServers,
+  disposeMcpServers, installMcpSeam, mountAhead, mountOnDemand, syncMcpServers,
   type McpServerWire, type MountedMcp,
 } from './mcp-servers.ts'
 import {
@@ -70,7 +73,9 @@ export interface TurnPrep {
   preloads: ResolvedSkill[]
   /** The persona's chat-memory block ('' = none this turn; preload.ts). */
   memoryBlock: string
-  /** The persona the memory block belongs to ('' = Default; preload.ts). */
+  /** The persona's auto-recall block ('' = none this turn; preload.ts). */
+  recallBlock: string
+  /** The persona both blocks belong to ('' = Default; preload.ts). */
   memoryPersona: string
   standingCtx: SessionToolCtx
   requestCtx: TurnRequestCtx
@@ -335,25 +340,34 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
       if (ours === undefined || downstream.kind !== 'enter') return downstream
       return { ...downstream, messages: [...downstream.messages, ours] }
     })
-    // The persona's preloaded skill bodies and its chat-memory block — each
-    // once per active surface (see the INVARIANT in preload.ts).
+    // The persona's preloaded skill bodies, its chat-memory block and its
+    // auto-recall block — each once per active surface (see the INVARIANT in
+    // preload.ts).
     agentCtx.on('agent/pre-step', async ({ agent, step }: { agent: any; step: number }, next: () => Promise<PreStepDecision>): Promise<PreStepDecision> => {
       const downstream = await next()
       const prep = entry.current
       if (!prep || downstream.kind !== 'enter') return downstream
       const ours = preloadMessages(prep.preloads, step, () => agent.session.deriveMessages())
-      const memory = memoryAction(
-        prep.memoryBlock, prep.memoryPersona, step, () => surfaceMemoryNodes(agent.session))
-      if (memory?.kind === 'append') ours.push(memory.message)
-      if (memory?.kind === 'replace') {
+      // Both actions read the surface BEFORE either lands: they are of different
+      // kinds, so one node's replacement never moves the other's seq.
+      const actions = [
+        memoryAction(prep.memoryBlock, prep.memoryPersona, step, () => surfaceMemoryNodes(agent.session, MEMORY_KIND), MEMORY_KIND, MEMORY_OFF_NOTE),
+        memoryAction(prep.recallBlock, prep.memoryPersona, step, () => surfaceMemoryNodes(agent.session, RECALL_KIND), RECALL_KIND, RECALL_OFF_NOTE),
+      ]
+      for (const action of actions) {
+        if (!action) continue
+        if (action.kind === 'append') {
+          ours.push(action.message)
+          continue
+        }
         // WHY a direct append, not the decision's messages: the decision only
         // appends; dropping the old block off the surface is dsh's own
         // surface op (types.ts SurfaceOp — "any surface-replacing producer").
-        agent.session.append('user/message', memory.message, {
-          surfaceOp: { op: 'replace', startSeq: memory.seq, endSeq: memory.seq },
-          sourceEventSeqs: [memory.seq],
+        agent.session.append('user/message', action.message, {
+          surfaceOp: { op: 'replace', startSeq: action.seq, endSeq: action.seq },
+          sourceEventSeqs: [action.seq],
         })
-        logSwapped(memory)
+        logSwapped(action)
       }
       if (!ours.length) return downstream
       logInjected(ours)
@@ -371,7 +385,11 @@ function sessionSetup(entry: SessionAgent): (agentCtx: Context) => void {
         return {
           name: LORE_SKILL_PROVIDER,
           list: (options: any) => skills().list(options),
-          get: (candidate: any, options: any) => skills().get(candidate, options),
+          // Loading an on-demand server's skill mounts the server first.
+          get: async (candidate: any, options: any) => {
+            await mountOnDemand(entry, String(candidate?.name ?? ''))
+            return skills().get(candidate, options)
+          },
         }
       })
     })

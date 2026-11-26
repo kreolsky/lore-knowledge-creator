@@ -420,6 +420,15 @@ export interface ChatMemoryRecord {
   error: string | null;
 }
 
+/** chat_sessions.recall: the earlier conversations the persona recalled on its
+ * own (a `chat_recall_budget` persona), on the turn of `message_id`. Written
+ * only with hits, so it has neither an error nor an empty state; titles are
+ * resolved at read (GET /chat/sessions/{id}/memory, key `recall`). */
+export interface ChatRecallRecord {
+  message_id: string;
+  chats: { sid: string; date: string }[];
+}
+
 export interface ChatSession {
   session_id: string;
   project_id: string;
@@ -500,6 +509,9 @@ export interface ChatSession {
   // The conversation memory this chat received (server-authored; the send
   // reply carries it after the turn that recorded it). null/absent = none decided.
   memory?: ChatMemoryRecord | null;
+  // The auto-recall this chat received (server-authored; the send reply carries
+  // it after the turn that recorded it). null/absent = none recorded.
+  recall?: ChatRecallRecord | null;
   // ARCH (plan session-title-from-the-harness): the title pin — a PATCH title
   // (user rename) sets it backend-side, and the harness titler's relayed
   // revision skips pinned rows. Frontend never writes it; declared because

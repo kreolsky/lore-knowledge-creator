@@ -25,6 +25,14 @@
  *   at its claim without a wait; its servers' tools arrive from the next
  *   step on.
  *
+ * # ARCH: an ON-DEMAND server is a skill until loaded. withMcpSkills adds
+ *   `mcp-<name>` to the catalog (description from the server's own MCP
+ *   instructions, captured by the backend's connection check); the mount
+ *   filter in syncMcpServers skips it until the skill is in the loaded set;
+ *   loading it (the provider's get → mountOnDemand) mounts and waits the same
+ *   bound as mountAhead. The loaded set restores from the session log like
+ *   any skill, so the server stays for the rest of the chat.
+ *
  * # ARCH: an external tool is NAMED external in its own description. dsh
  *   copies a server's tool description verbatim (mcp-client tools.ts), so a
  *   server serving tools named like the host's own (another Lore's gateway:
@@ -73,6 +81,7 @@ import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { publicToolName } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
 
 import { hasLoreGrant, revokeServerGrants } from './approvals.ts'
+import type { ResolvedSkill } from './skills.ts'
 
 /** The bound on ONE mount's contribution to the turn's first assembly. */
 export const MCP_MOUNT_WAIT_MS = 5000
@@ -95,6 +104,12 @@ export interface McpServerWire {
   secret_values: string[]
   /** The definer's ruling: every tool of this server runs with no ask. */
   auto_approve: boolean
+  /** The definer's ruling: mounted only once the agent loads `mcp-<name>`. */
+  on_demand: boolean
+  /** The server's own MCP instructions, captured at the last check ('' = none). */
+  instructions: string
+  /** The server's tool names, captured at the last check. */
+  tool_names: string[]
 }
 
 /** The payload's `mcp_servers` array → validated entries; an invalid entry is
@@ -124,7 +139,13 @@ export function parseMcpServers(body: Record<string, any>): McpServerWire[] {
     const title = (typeof item.title === 'string' ? item.title : '').split(/\s+/).filter(Boolean).join(' ') || name
     // Anything but a literal true asks — the fail-safe default.
     const autoApprove = item.auto_approve === true
-    out.push({ name, url, title, headers, secret_values: secretValues, auto_approve: autoApprove })
+    const instructions = typeof item.instructions === 'string' ? item.instructions : ''
+    const toolNames = (Array.isArray(item.tool_names) ? item.tool_names : [])
+      .filter((v: unknown): v is string => typeof v === 'string' && v !== '')
+    out.push({
+      name, url, title, headers, secret_values: secretValues, auto_approve: autoApprove,
+      on_demand: item.on_demand === true, instructions, tool_names: toolNames,
+    })
   }
   if (out.length > 0) {
     console.error(`[lore-mcp] prep ${out.length} server(s): ${out.map((s) => s.name).join(',')}`)
@@ -161,8 +182,12 @@ export interface McpSeamSite {
   current: {
     mcpServers: McpServerWire[]
     standingCtx: { loreSessionId: string }
+    /** The skills this turn restored as loaded (log restore + preloads). */
+    activated: Set<string>
   } | null
   mcpMounted: Map<string, MountedMcp>
+  /** The session's loaded skills — restores plus live loads. */
+  activated: Set<string>
 }
 
 type McpPrep = NonNullable<McpSeamSite['current']>
@@ -175,7 +200,14 @@ export function syncMcpServers(entry: McpSeamSite, prep: McpPrep | null = entry.
   const waits: Promise<unknown>[] = []
   const agentCtx = entry.agentCtx
   if (!agentCtx) return waits
-  const wanted = prep?.mcpServers ?? []
+  // An on-demand server rides only once its skill is loaded — in this turn's
+  // restore (prep.activated: mountAhead runs before the claim merges it) or
+  // live (entry.activated).
+  const wanted = (prep?.mcpServers ?? []).filter((server) => {
+    if (!server.on_demand) return true
+    const skill = mcpSkillName(server.name)
+    return entry.activated.has(skill) || prep!.activated.has(skill)
+  })
   const wantByName = new Map(wanted.map((server) => [server.name, server]))
   for (const [name, mounted] of entry.mcpMounted) {
     const next = wantByName.get(name)
@@ -215,7 +247,12 @@ export function syncMcpServers(entry: McpSeamSite, prep: McpPrep | null = entry.
 /** Mount a prep's servers before its message is queued and wait for them,
  * at most MCP_MOUNT_WAIT_MS (see module ARCH). */
 export async function mountAhead(entry: McpSeamSite, prep: McpPrep): Promise<void> {
-  const waits = syncMcpServers(entry, prep)
+  await boundedWait(syncMcpServers(entry, prep))
+}
+
+/** Await mount settles, at most MCP_MOUNT_WAIT_MS — a dead server costs the
+ * bound and its tools are simply absent. */
+async function boundedWait(waits: Promise<unknown>[]): Promise<void> {
   if (waits.length === 0) return
   let timer: ReturnType<typeof setTimeout> | undefined
   const bound = new Promise<void>((resolve) => { timer = setTimeout(resolve, MCP_MOUNT_WAIT_MS) })
@@ -224,6 +261,98 @@ export async function mountAhead(entry: McpSeamSite, prep: McpPrep): Promise<voi
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** The skill an on-demand server is advertised as. The backend admits
+ * on_demand only for a name that fits dsh's skill grammar as is. */
+export function mcpSkillName(serverName: string): string {
+  return `mcp-${serverName}`
+}
+
+/** The servers a persona may still mount: an eager server always, an
+ * on-demand one only while its skill is VISIBLE — hiding the skill hides the
+ * server (the persona's `allow` / `deny`, skills.ts splitVisibleSkills). The
+ * caller passes the result as the prep's list, so syncMcpServers diffs it: a
+ * mount an earlier persona of this chat left is disposed at the claim, and
+ * none is made again. An eager server is no skill, so a persona cannot hide
+ * it — the admin's own list is its only off-switch. */
+export function visibleMcpServers<T extends { name: string; on_demand: boolean }>(
+  servers: T[], visibleNames: Set<string>,
+): T[] {
+  return servers.filter(
+    (server) => !server.on_demand || visibleNames.has(mcpSkillName(server.name)))
+}
+
+const DESCRIPTION_INSTRUCTIONS_CHARS = 300
+const DESCRIPTION_TOOL_NAMES = 10
+
+/** The catalog line of an on-demand server's skill: the server's own
+ * instructions (first sentence, bounded), else its tool names, else a bare
+ * pointer — a server never checked has captured nothing yet.
+ * WHY: first sentence, not first paragraph — a server writes its instructions
+ * for an agent that already has the tools (lore-health: one 800-character
+ * paragraph of how-to-read rules after one sentence of what it is), and the
+ * catalog only has to say what the service is. */
+function mcpSkillDescription(server: McpServerWire): string {
+  const head = `${server.title} — external service (MCP server "${server.name}").`
+  const text = server.instructions.trim().split(/\s+/).join(' ')
+  const sentence = text.match(/^.+?[.!?](?=\s|$)/)?.[0] ?? text
+  if (sentence) {
+    const cut = sentence.length > DESCRIPTION_INSTRUCTIONS_CHARS
+      ? `${sentence.slice(0, DESCRIPTION_INSTRUCTIONS_CHARS).trimEnd()}…` : sentence
+    return `${head} ${cut}`
+  }
+  if (server.tool_names.length) {
+    return `${head} Tools: ${server.tool_names.slice(0, DESCRIPTION_TOOL_NAMES).join(', ')}.`
+  }
+  return `${head} Load to connect it and see its tools.`
+}
+
+/**
+ * The on-demand servers as skills, appended to the resolved catalog: one
+ * prose-only skill (empty pack, always advertised) per on-demand server.
+ * Loading it is what mounts the server (mountOnDemand, from the provider's
+ * get); its tools then reach the next step, because dsh resolves the step's
+ * tool set per step. A document skill already named `mcp-<name>` wins: the
+ * server is served eager instead — its tools must not become unreachable.
+ * Returns the catalog and the servers with that fallback applied.
+ */
+export function withMcpSkills(
+  skills: ResolvedSkill[], servers: McpServerWire[],
+): { skills: ResolvedSkill[]; servers: McpServerWire[] } {
+  const taken = new Set(skills.map((s) => s.name))
+  const extra: ResolvedSkill[] = []
+  const out = servers.map((server) => {
+    if (!server.on_demand) return server
+    const name = mcpSkillName(server.name)
+    if (taken.has(name)) {
+      console.error(`[lore-mcp] skill ${name} exists as a document — ${server.name} served eager`)
+      return { ...server, on_demand: false }
+    }
+    extra.push({
+      name,
+      description: mcpSkillDescription(server),
+      tools: [],
+      location: `mcp:${server.name}`,
+      body: `The ${server.title} MCP server is connected for this chat; its tools are mcp__${server.name}__*. `
+        + 'If they are missing on the next step, the server did not answer — say so instead of retrying.',
+      child_docs: [],
+    })
+    return server
+  })
+  return { skills: [...skills, ...extra], servers: out }
+}
+
+/** The skill loader's hook: loading an on-demand server's skill records it
+ * as loaded and mounts the server, waiting at most MCP_MOUNT_WAIT_MS, so the
+ * body returns once the tools can reach the next step. Any other skill: no-op. */
+export async function mountOnDemand(entry: McpSeamSite, skillName: string): Promise<void> {
+  const prep = entry.current
+  const server = prep?.mcpServers.find((s) => s.on_demand && mcpSkillName(s.name) === skillName)
+  if (!prep || !server) return
+  entry.activated.add(skillName)
+  console.error(`[lore-mcp] on-demand load ${server.name}`)
+  await boundedWait(syncMcpServers(entry, prep))
 }
 
 /** Mount one server (plus its marks listing) onto the agent scope. Null when

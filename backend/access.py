@@ -107,7 +107,7 @@ async def _resolve_project_access(project_id: str, user: dict) -> str | None:
     # is the explicit act of joining a project, and the admin's instance role
     # tops up the joined access (never the reverse: elevation is gated on the
     # row existing, so a row is required on private projects).
-    if member_rows and is_instance_admin(user):
+    if member_rows and await _is_elevated_for(project, user):
         return "full"
     levels: list[str | None] = []
     if member_rows:
@@ -152,6 +152,24 @@ def is_moderator_of(user: dict, target: dict) -> bool:
     )
 
 
+async def _is_elevated_for(project: dict, user: dict) -> bool:
+    """Whether the caller's instance role elevates a member row on `project`:
+    any admin, or the moderator of the project owner's group.
+
+    # INVARIANT(security): a moderator holds admin rights ONLY in projects owned
+    # by a user of their group, and only through a member row like an admin.
+    # Why: operator ruling — "у модератора должны быть такие же права как у
+    # администратора в проектах его группы"; a foreign-group project stays foreign.
+    """
+    if is_instance_admin(user):
+        return True
+    if user.get("role") != "moderator":
+        return False
+    owner_id = project.get("owner_id")
+    owner = await fetch_one("users", owner_id) if owner_id else None
+    return bool(owner) and is_moderator_of(user, owner)
+
+
 async def recompute_project_access(project_id: str, user_id: str) -> str | None:
     """Re-resolve a user's effective project access from live rows.
 
@@ -187,7 +205,8 @@ async def emit_access_changed_recomputed(project_id: str, user_id: str | None) -
 
 
 async def is_project_root(project: dict, user: dict) -> bool:
-    """Whether the user is a project root: the owner, or an admin with a
+    """Whether the user is a project root: the owner, or an elevated caller
+    (`_is_elevated_for`: admin, or the owner's group moderator) with a
     project_members row.
 
     # ARCH: the member row is the
@@ -200,7 +219,7 @@ async def is_project_root(project: dict, user: dict) -> bool:
         return False
     if project.get("owner_id") == user["user_id"]:
         return True
-    if not is_instance_admin(user):
+    if not await _is_elevated_for(project, user):
         return False
     project_id = project.get("project_id") or extract_id(project.get("id")) or ""
     if not project_id:
@@ -429,8 +448,7 @@ async def require_digest_deleter(project_id: str, user: dict, created_by: str | 
 # ─── Ownership gate (manages membership) ────────────────────────────────────
 
 async def require_project_owner(project: dict, user: dict) -> None:
-    """Raise 403 unless `user` is a project root: the owner, or an admin with a
-    project_members row.
+    """Raise 403 unless `user` is a project root (`is_project_root`).
 
     # INVARIANT(security): Only a project root manages membership.
     # Why: industry standard (GitHub/Notion); avoids mutual revoke between full

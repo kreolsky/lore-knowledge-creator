@@ -55,6 +55,8 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
   const [authMode, setAuthMode] = useState<McpAuthMode>(initial?.auth_mode ?? 'personal');
   const [helpUrl, setHelpUrl] = useState(initial?.help_url ?? '');
   const [autoApprove, setAutoApprove] = useState(initial?.auto_approve ?? false);
+  // A new server starts on demand: most services are needed in few chats.
+  const [onDemand, setOnDemand] = useState(initial?.on_demand ?? true);
   // Write-only draft: never prefilled, omitted from the body when empty.
   const [sharedKey, setSharedKey] = useState('');
   // Scheme preset is derived from the stored prefix, never stored itself.
@@ -80,6 +82,7 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
       auth_scheme: { bearer: 'Bearer', raw: '', custom: scheme.trim() }[schemePreset],
       help_url: helpUrl.trim(),
       auto_approve: autoApprove,
+      on_demand: onDemand,
       ...(authMode === 'shared' && sharedKey ? { shared_key: sharedKey } : {}),
       // Create always names a subject (the backend defaults to public, which
       // a moderator may not pick); edit sends subjects for admins only — a
@@ -227,6 +230,14 @@ function ServerForm({ initial, isAdmin, ownSubject, groups, disabled, error, onS
         disabled={disabled}
       />
       <p className="text-xs text-text-dim -mt-1">{t('adminMcpAutoApproveHint')}</p>
+
+      <FieldCheckbox
+        checked={onDemand}
+        onChange={setOnDemand}
+        label={t('adminMcpOnDemand')}
+        disabled={disabled}
+      />
+      <p className="text-xs text-text-dim -mt-1">{t('adminMcpOnDemandHint')}</p>
 
       {isAdmin ? (
         <>
@@ -418,6 +429,9 @@ export function McpServersSection() {
                 </span>
                 {server.auto_approve && (
                   <span className="text-xs text-text-dim whitespace-nowrap">{t('adminMcpAutoApproveBadge')}</span>
+                )}
+                {server.on_demand && (
+                  <span className="text-xs text-text-dim whitespace-nowrap">{t('adminMcpOnDemandBadge')}</span>
                 )}
                 <span className="flex-1" />
                 <FieldCheckbox

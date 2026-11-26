@@ -5,6 +5,7 @@
  * index.ts re-exports the public surface.
  */
 
+import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { reasoningEffortsDeclaration } from './caps.ts'
 import { ROUTER_URL_REF, WEB_SEARCH_KEY_REF } from './web-search/key.ts'
 
@@ -78,6 +79,30 @@ export interface LoreRouteScaffold {
   defaultContextWindow?: number
   defaultMaxTokens?: number
   requestImageMaxBytes?: number
+  retryPolicy?: { mode: 'normal', retryableCodes: string[] }
+}
+
+/** `retryPolicy` for both route scaffolds: dsh's default transient codes plus
+ * MALFORMED_RESPONSE — completed tool-call arguments that are not JSON
+ * (Anthropic's eager tool-input streaming sends them unvalidated). The failed
+ * step executed nothing, so a fresh generation is safe, and it usually
+ * succeeds where one malformed call otherwise ends the whole turn.
+ * no-retry-after-text still vetoes it once the step printed reply text. */
+const DSH_DEFAULT_RETRY = resolveRetryPolicy(undefined, 'lore route')
+export const ROUTE_RETRY_POLICY: { mode: 'normal', retryableCodes: string[] } = {
+  mode: 'normal',
+  // WHY derived, not listed: retryableCodes REPLACES dsh's default set, so a
+  // hand copy would silently drift from upstream on the next DSH_SHA bump.
+  retryableCodes: [
+    ...('retryableCodes' in DSH_DEFAULT_RETRY ? DSH_DEFAULT_RETRY.retryableCodes : []),
+    'MALFORMED_RESPONSE',
+  ],
+}
+
+/** The committed route's retryable codes, comparable to a scaffold's. */
+function _retryCodesOf(section: Record<string, unknown> | undefined): string {
+  const policy = section?.retryPolicy as { retryableCodes?: unknown } | undefined
+  return Array.isArray(policy?.retryableCodes) ? policy.retryableCodes.join(',') : ''
 }
 
 /** The credentials ref the route's key resolves through — Lore-internal, set
@@ -211,11 +236,13 @@ export async function ensureModelEntry(
     // differs: baseURL (an admin edit), apiKeyEnv (a route committed under
     // the pre-admin ref) or requestImageMaxBytes (a route committed before
     // the press contract — an existing install must get the new field too,
-    // not keep re-encoding every pressed image over 1 MiB).
+    // not keep re-encoding every pressed image over 1 MiB), or the retry
+    // codes (same reason: an existing install must get the new policy).
     const scaffoldPatch = scaffold !== null
       && (routeSection?.baseURL !== scaffold.baseURL || routeSection?.apiKeyEnv !== scaffold.apiKeyEnv
         || routeSection?.requestImageMaxBytes !== scaffold.requestImageMaxBytes
-        || routeSection?.defaultMaxTokens !== scaffold.defaultMaxTokens)
+        || routeSection?.defaultMaxTokens !== scaffold.defaultMaxTokens
+        || _retryCodesOf(routeSection) !== (scaffold.retryPolicy?.retryableCodes.join(',') ?? ''))
       ? scaffold
       : {}
     // Skip when the committed entry already carries every value this turn

@@ -91,7 +91,7 @@ import { withThreadRow } from './branches-slice';
 import { appendDraft } from './misc-slice';
 import {
   streamCompletion, flushStreaming, emptyStreaming, hasOpenHarnessTurn, markHarnessTurnAborted,
-  rememberQueuedSend, forgetQueuedSend, applyReplyMemory,
+  rememberQueuedSend, forgetQueuedSend, applyReplyRecords,
 } from './streaming';
 import { rewindToLineage } from './conversation-feed';
 import { seatSessionRows, afterSessionRowsCommitted } from './session-rows';
@@ -229,7 +229,7 @@ async function queueSend(
   rememberQueuedSend(wire.userMsgId, content, images, files);
   try {
     const reply = await apiClient.post(`/chat/sessions/${sessionId}/completions`, completionBody(get, sessionId, wire));
-    applyReplyMemory(set, sessionId, reply);
+    applyReplyRecords(set, sessionId, reply);
   } catch (e) {
     forgetQueuedSend(wire.userMsgId);
     if (handleSendError(e, 'Chat queue error:', set, get) && content) {

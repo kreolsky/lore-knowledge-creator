@@ -560,6 +560,10 @@ export const ru: Record<TranslationKey, string> = {
   removeQueued: 'Убрать сообщение из очереди',
   chatSaveError: 'Ответ не сохранён',
   chatContextWarning: 'Некоторые контекстные документы не загрузились',
+  // Turn warnings of the persona's auto-recall, each with a text of its own:
+  // the generic one above reads as a document failure (chat-store/streaming.ts).
+  chatRecallFailed: 'Персона не смогла вспомнить ваши прошлые разговоры — ответ дан без них',
+  chatRecallOffNotice: 'Автовспоминание выключено: {error}',
   chatStreamDegraded: 'Часть содержимого потока была потеряна',
   chatContextSummarized: 'Контекст беседы был сжат, чтобы освободить место',
   chatCompactionArchiveFailed: 'Контекст был сжат, но архив беседы сохранить не удалось — предыдущая расшифровка недоступна',
@@ -672,6 +676,12 @@ export const ru: Record<TranslationKey, string> = {
   chatMemoryOffNotice: 'Память персоны выключена: {error}',
   chatMemoryHidden: 'Ещё недоступны: {count}',
   chatMemoryLoadFailed: 'Не удалось загрузить память чата',
+  // The earlier conversations the persona recalled on its own (chat_sessions.recall).
+  chatRecallRow_one: 'Вспомнил: {count} прошлый разговор',
+  chatRecallRow_few: 'Вспомнил: {count} прошлых разговора',
+  chatRecallRow_many: 'Вспомнил: {count} прошлых разговоров',
+  chatRecallRow_other: 'Вспомнил: {count} прошлого разговора',
+  chatRecallLoadFailed: 'Не удалось загрузить вспомненные разговоры',
 
   // Reasoning-effort dropdown (plan reasoning-effort-selector) — default sends
   // no effort and the provider's default applies; the rest are the model's
@@ -800,6 +810,9 @@ export const ru: Record<TranslationKey, string> = {
   adminMcpHelpUrlPlaceholder: 'где получить ключ — https://…',
   adminMcpAutoApprove: 'Выполнять без подтверждения',
   adminMcpAutoApproveBadge: 'без подтверждения',
+  adminMcpOnDemand: 'Подключать по требованию',
+  adminMcpOnDemandBadge: 'по требованию',
+  adminMcpOnDemandHint: 'Агент видит один скилл mcp-<имя> вместо всех инструментов; сервер подключается, когда агент загружает этот скилл, и остаётся до конца чата. Описание скилла берётся у самого сервера — после сохранения нажмите «Проверить подключение». Имя — строчные латинские буквы, цифры и дефисы.',
   adminMcpAutoApproveHint: 'Агент вызывает все инструменты этого сервера, не спрашивая пользователя, — включая те, что меняют данные. Только для доверенных внутренних серверов на чтение.',
   adminMcpSharedReenterHint: 'адрес сервера перешёл на другой хост — введите ключ заново',
   adminMcpAdvanced: 'Дополнительно',

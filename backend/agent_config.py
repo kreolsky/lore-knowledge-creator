@@ -8,9 +8,18 @@
 #
 # ARCH (edit tiers):
 #   - Bootstrap tier (IMMUTABLE to the agent, instance admin setting
-#     AGENT_BOOTSTRAP_PROMPT): the Tool-API contract, "load your config from the
-#     project", RBAC, the mid-turn hold. Read every turn — the agent can never
-#     edit it. It is the floor under every assembled prompt.
+#     AGENT_BOOTSTRAP_PROMPT): the FLOOR — the rights the agent acts with, "a
+#     write is done only when it says applied", confirmation-mode waiting and
+#     refusals. Read every turn, first — the agent can never edit it. It is
+#     the floor under every assembled prompt.
+#   - Base persona tier (IMMUTABLE to the agent, instance admin setting
+#     AGENT_BASE_PERSONA_PROMPT): the home agent's identity and the turn policy
+#     (answer vs. change a document). Follows the floor in every project unless
+#     the selected persona's frontmatter says `base_prompt: false` — a persona
+#     that defines its role itself drops it.
+#   - HOW a document is read and changed is in NO admin text: it travels with
+#     the tools, in the shipped `main-*` skills (agent_skills.py ARCH), so a
+#     persona that hides a skill loses its instructions with its tools.
 #   - Config documents (EDITABLE): persona/rules/skills. Edited by
 #     the user freely; self-edited by the agent through the SAME pipeline.
 #
@@ -42,11 +51,13 @@
 # children via parent_id, mirroring the rules children. No leaf role tag
 # participates in loading.
 #
-# INVARIANT(security): the bootstrap tier is an instance admin setting, never a project
-# document — the agent has no write path to instance settings. Why: it carries the
-# safety contract (RBAC, "a write is done only when it says applied"); letting the agent edit
-# it would let it rewrite its own constraints. Only persona/rules/skills
-# are docs.
+# INVARIANT(security): the bootstrap and base-persona tiers are instance admin
+# settings, never project documents — the agent has no write path to instance
+# settings. Why: the bootstrap carries the safety contract (the user's rights,
+# "a write is done only when it says applied"); letting the agent edit it would
+# let it rewrite its own constraints. The safety lines live in it and in no
+# skill: a project can shadow a skill (the catalog overlay), never these texts.
+# Only persona/rules/skills are docs.
 #
 # WHY (resilient lazy init): deterministic-id skeleton docs are created via
 # _upsert_system_doc, which UPDATE-resurrects a present-but-soft-deleted row
@@ -64,25 +75,24 @@
 # persona injected (silent regression), and would still carry the inert leaf role
 # tags the loader no longer expects.
 #
-# ARCH (module split, strict DAG): this file is a FAÇADE — the three submodules hold
+# ARCH (module split, strict DAG): this file is a FAÇADE — the submodules hold
 # the code; it re-exports the public surface via __all__ so all import sites keep
 # working unchanged.
 #   agent_config_seed   (role vocabulary, paths, _upsert_system_doc, _find_system_docs)
 #            ↑
-#   agent_config_load   agent_skills (PURE — no DB)
-#            ↑                ↑
+#   agent_config_load   agent_skills (PURE — no DB)   persona_settings (PURE — no DB)
+#            ↑                ↑                             ↑
 #             agent_config  (ensure_* orchestration + build_agent_system_prompt + façade)
 # agent_skills is pure over strings (the raw skill-document LOOKUP — the
-# skill frontmatter parse lives in the harness plugin); agent_config_load imports seed
-# primitives. No module imports the façade → no cycle.
+# skill frontmatter parse lives in the harness plugin); persona_settings is pure
+# over the persona document's frontmatter (PersonaSettings, parse_persona);
+# agent_config_load imports seed primitives. No module imports the façade → no cycle.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import settings
-import yaml
 from agent_config_load import (
     live_help_root,
     load_agent_system_docs,
@@ -106,128 +116,16 @@ from agent_config_seed import (
 )
 from agent_skills import (
     build_skill_docs,
+    project_embed_schemes,
     shipped_skill_docs,
 )
+from persona_settings import PersonaSettings, parse_persona
 
 import config
-from doc_properties import FRONTMATTER_RE
-from transclusion_grammar import render_embed_schemes
 
 logger = logging.getLogger(__name__)
 
-# ─── Persona frontmatter ──────────────────────────────────────────────────────
-
-# A persona document MAY open with a YAML frontmatter block: first line exactly
-# `---`, closed by a lone `---` line (the skill-document format, skills.ts
-# parseSkillDoc). Anchored at the very start — a `---` later in the body is prose.
-# The regex is doc_properties.FRONTMATTER_RE (the ONE tree splitter): a persona
-# that works as a persona can never disagree with the props grammar.
-_PERSONA_FRONTMATTER_RE = FRONTMATTER_RE
-
-
-@dataclass(frozen=True)
-class PersonaSettings:
-    """A persona document split into the text injected under `# Persona` and the
-    settings its frontmatter declares. `warnings` are the parse complaints, for
-    the caller to log once with the persona id (the parse itself is pure)."""
-    body: str
-    skills: tuple[str, ...] = ()
-    # 0 = chat memory OFF; a positive int = ON with this token budget.
-    chat_memory_budget: int = 0
-    # The memory block's chat order: "recent" (newest first) or "document"
-    # (chats under the current document's subtree first, then newest).
-    chat_memory_order: str = "recent"
-    warnings: tuple[str, ...] = ()
-    # Why memory is OFF although the frontmatter asks for it: an invalid
-    # `chat_memory_budget`, or unreadable frontmatter that mentions it. None =
-    # no such complaint. A bad `chat_memory_order` is NOT one — memory stays
-    # on with `recent`.
-    memory_error: str | None = None
-
-
-def parse_persona(content: str) -> PersonaSettings:
-    """Split a persona document's optional frontmatter off its text.
-
-    Keys read: `skills` (list of skill names preloaded for this persona),
-    `chat_memory_budget` (positive int = memory ON) and `chat_memory_order`
-    (`recent` | `document`, absent = `recent`). Other keys are ignored
-    silently. Malformed YAML or a non-mapping block ⇒ the WHOLE content is the
-    body (the pre-frontmatter behaviour) plus a warning; an invalid value of a
-    read key ⇒ that setting is off plus a warning.
-
-    # WHY a Python parser beside the plugin's skill parser: the persona is a
-    # document the backend already reads and injects, and its settings are needed
-    # by the backend (preload list, memory budget) — no plugin code runs there.
-    # Skill documents stay parsed only by the plugin.
-    """
-    raw = content or ""
-    match = _PERSONA_FRONTMATTER_RE.match(raw)
-    if not match:
-        return PersonaSettings(body=raw.strip())
-    # A broken block that mentions the budget is the owner's memory, not just
-    # unread settings — the chat says why memory is off.
-    asks_memory = "chat_memory_budget" in match.group(1)
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError as exc:
-        warning = f"malformed frontmatter YAML: {' '.join(str(exc).split())}"
-        return PersonaSettings(body=raw.strip(), warnings=(warning,),
-                               memory_error=warning if asks_memory else None)
-    if data is None:
-        data = {}
-    if not isinstance(data, dict):
-        warning = "frontmatter is not a YAML mapping"
-        return PersonaSettings(body=raw.strip(), warnings=(warning,),
-                               memory_error=warning if asks_memory else None)
-    warnings: list[str] = []
-    skills = _persona_skills(data.get("skills"), warnings)
-    budget = _persona_memory_budget(data, warnings)
-    order = _persona_memory_order(data, warnings)
-    budget_error = next((w for w in warnings if w.startswith("chat_memory_budget")), None)
-    return PersonaSettings(
-        body=raw[match.end():].strip(), skills=skills,
-        chat_memory_budget=budget, chat_memory_order=order, warnings=tuple(warnings),
-        memory_error=budget_error,
-    )
-
-
-def _persona_skills(value: object, warnings: list[str]) -> tuple[str, ...]:
-    """The `skills` list: non-empty strings, deduplicated in order; anything else warns."""
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        warnings.append(f"skills must be a list of skill names, got {type(value).__name__}")
-        return ()
-    names = [v.strip() for v in value if isinstance(v, str) and v.strip()]
-    if len(names) != len(value):
-        warnings.append("skills: non-string or empty entries ignored")
-    return tuple(dict.fromkeys(names))
-
-
-def _persona_memory_budget(data: dict, warnings: list[str]) -> int:
-    """`chat_memory_budget`: absent ⇒ 0 silently; a positive int ⇒ itself; else 0 + warning."""
-    if "chat_memory_budget" not in data:
-        return 0
-    value = data["chat_memory_budget"]
-    # bool is an int subclass — `true` is not a budget.
-    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-        return value
-    warnings.append(f"chat_memory_budget must be a positive integer, got {value!r} — chat memory off")
-    return 0
-
-
-_MEMORY_ORDERS = ("recent", "document")
-
-
-def _persona_memory_order(data: dict, warnings: list[str]) -> str:
-    """`chat_memory_order`: absent ⇒ "recent" silently; a known value ⇒ itself; else "recent" + warning."""
-    if "chat_memory_order" not in data:
-        return "recent"
-    value = data["chat_memory_order"]
-    if value in _MEMORY_ORDERS:
-        return value
-    warnings.append(f"chat_memory_order must be one of {', '.join(_MEMORY_ORDERS)}, got {value!r} — recent")
-    return "recent"
+# ─── Persona selection ────────────────────────────────────────────────────────
 
 
 def selected_persona_doc(docs_by_role: dict[str, object], persona_id: str | None) -> dict | None:
@@ -243,19 +141,18 @@ def selected_persona_doc(docs_by_role: dict[str, object], persona_id: str | None
     return None
 
 
-# ─── Bootstrap tier (instance admin setting — the agent cannot edit this) ─────
+# ─── The admin tiers (instance settings — the agent cannot edit these) ───────
 
 
-def render_bootstrap(template: str) -> str:
-    """The bootstrap text with the embed-scheme token projected from SCHEME_TABLE."""
-    # WHY str.replace, not str.format: the admin-edited text carries literal
-    # braces ({status:"applied"}, edits:[{…}]) that .format would read as fields.
-    return template.replace(config.BOOTSTRAP_EMBED_TOKEN, render_embed_schemes()).rstrip()
+# The shipped defaults (env⊕default leg) — what a turn serves when no admin
+# override exists. Both are read rstrip()ed: the admin text and the shipped
+# file may end in newlines, and the prompt joins its parts with blank lines.
+def _admin_text(raw: str) -> str:
+    return raw.rstrip()
 
 
-# The shipped default (env⊕default leg) — what a turn serves when no admin
-# override exists.
-DEFAULT_BOOTSTRAP_PROMPT = render_bootstrap(config.AGENT_BOOTSTRAP_PROMPT)
+DEFAULT_BOOTSTRAP_PROMPT = _admin_text(config.AGENT_BOOTSTRAP_PROMPT)
+DEFAULT_BASE_PERSONA_PROMPT = _admin_text(config.AGENT_BASE_PERSONA_PROMPT)
 
 
 async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
@@ -371,23 +268,29 @@ def render_subtree_section(
 
 def build_agent_system_prompt(
     bootstrap: str, docs_by_role: dict[str, object], selected_persona_id: str | None = None,
-    help_root: dict | None = None,
+    help_root: dict | None = None, base_persona: str | None = None,
 ) -> str:
-    """Assemble the agent system prompt: immutable bootstrap + (selected) persona +
-    rules subtree + a pointer to the Lore guide (`help_root`,
-    `{id, title}`, None → no section).
+    """Assemble the agent system prompt: immutable bootstrap + (base persona) +
+    (selected) persona + rules subtree + a pointer to the Lore guide
+    (`help_root`, `{id, title}`, None → no section).
 
     Pure function (no DB) so it is unit-testable. The bootstrap tier is ALWAYS
     first: `bootstrap` is the rendered AGENT_BOOTSTRAP_PROMPT setting, which the
-    agent cannot edit; rules/skills come from the editable config
-    documents.
+    agent cannot edit; `base_persona` is the AGENT_BASE_PERSONA_PROMPT setting
+    (None = the selected persona said `base_prompt: false`); rules/skills come
+    from the editable config documents.
 
     # ARCH: this is the SOLE injection point for a
     # persona. Only the persona child whose id == selected_persona_id is injected
     # under `# Persona`; selected_persona_id is null (Default) → no persona
     # section at all. selected_persona_id is sourced from session.system_prompt_id
     # at the caller.
-    #
+
+    # INVARIANT(security): the floor is first and always — under every persona
+    # and every admin override of the two texts; the base persona may be dropped.
+    # Why: "the user's rights, applied-only writes, confirmation waits" hold for
+    # an agent that defines its own role exactly as for the home agent.
+
     # WHY: # Rules is a folder-held subtree (each node renders under
     # a `## {path} (id: {id})` header so content↔id is mappable for revisions; the
     # folder's header carries `(append new here)` — the stable self-append target).
@@ -396,6 +299,8 @@ def build_agent_system_prompt(
     # plugin's lore-skills provider), not rendered here.
     """
     parts: list[str] = [bootstrap]
+    if base_persona:
+        parts.append(base_persona)
 
     # Persona — only the selected one, exactly once, its frontmatter stripped
     # (the settings are read by the caller, never shown to the model).
@@ -443,7 +348,8 @@ async def build_prompt_and_skill_docs(
     instance_tombstones: NAMES of disabled instance rows} — the plugin parses
     them with the pinned harness's grammar and assembles the catalog (overlay
     project > instance > shipped + admin off-switch + served gate). Python
-    parses NOTHING here.
+    parses NOTHING here; the one projection is the embed-scheme token, replaced
+    in every skill body (project_embed_schemes) so the plugin never sees one.
 
     `selected_persona_id` is the persona to inject this turn, sourced from the
     session's system_prompt_id by the caller (prepare_agent_turn). null = Default.
@@ -457,9 +363,10 @@ async def build_prompt_and_skill_docs(
     for warning in persona.warnings:
         logger.warning("persona %s: %s", selected_persona_id, warning)
     prompt = build_agent_system_prompt(
-        render_bootstrap(await settings.get("AGENT_BOOTSTRAP_PROMPT")),
-        docs, selected_persona_id=selected_persona_id,
+        _admin_text(await settings.get("AGENT_BOOTSTRAP_PROMPT")), docs,
+        selected_persona_id=selected_persona_id,
         help_root=await live_help_root(project_id),
+        base_persona=_admin_text(await settings.get("AGENT_BASE_PERSONA_PROMPT")) if persona.base_prompt else None,
     )
     # ARCH: the served skill set is the
     # OVERLAY — project skills shadow instance ones by name, instance skills
@@ -468,9 +375,9 @@ async def build_prompt_and_skill_docs(
     # ledger). The overlay itself runs PLUGIN-side post-parse, together with
     # the served gate and the admin off-switch.
     return prompt, {
-        "project": build_skill_docs(docs.get("skills_children", [])),
-        "instance": await load_instance_skill_docs(),
-        "shipped": shipped_skill_docs(),
+        "project": project_embed_schemes(build_skill_docs(docs.get("skills_children", []))),
+        "instance": project_embed_schemes(await load_instance_skill_docs()),
+        "shipped": project_embed_schemes(shipped_skill_docs()),
         "instance_tombstones": await load_instance_skill_tombstones(),
     }, persona
 
@@ -480,7 +387,8 @@ async def build_prompt_and_skill_docs(
 # uniformly to every write surface rather than to the edit path alone.
 
 __all__ = [
-    "DEFAULT_BOOTSTRAP_PROMPT", "render_bootstrap", "SYSTEM_DOC_ROLES", "PROTECTED_SYSTEM_ROLES",
+    "DEFAULT_BASE_PERSONA_PROMPT", "DEFAULT_BOOTSTRAP_PROMPT", "SYSTEM_DOC_ROLES",
+    "PROTECTED_SYSTEM_ROLES",
     "_DEFAULT_RULES", "_REQUIRED_ROLES", "_MEMORY_ROLES",
     "_deterministic_id",
     "build_skill_docs", "shipped_skill_docs",

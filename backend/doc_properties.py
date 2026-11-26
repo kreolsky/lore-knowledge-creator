@@ -10,7 +10,7 @@ top; this module owns the properties half (find_documents + visibility), the
 convention half (next_task / claim_task) is task_convention.py.
 
 # ARCH (one splitter): the frontmatter grammar is parse_persona's regex,
-# moved HERE verbatim (agent_config imports it back), so a persona that works
+# moved HERE verbatim (persona_settings imports it back), so a persona that works
 # as a persona can never disagree with the projection — there is no second
 # grammar to drift. agent_skills.frontmatter_name stays put: it re-reads only
 # save_skill's own output, never a user header.

@@ -1,28 +1,32 @@
 /**
- * The «Память» chip before the user message whose turn brought the chat its
- * conversation memory (chat_sessions.memory), drawn as a process chip
- * (ToolPlate). Collapsed: how many past chats the agent received; expanded:
- * their titles, fetched from GET /chat/sessions/{id}/memory (titles are
- * resolved at read, never stored), each opening that chat by its title and
- * previewing its last message on hover (as the chat list does). An
- * error record is a failed chip whose body says why the persona's memory is
- * off; an empty one a chip with a count of 0 whose body says memory is on with
- * nothing to bring yet.
+ * The «Память» and «Вспомнил» chips before the user message whose turn brought
+ * the chat its conversation memory (chat_sessions.memory) or its auto-recall
+ * (chat_sessions.recall), each drawn as a process chip (ToolPlate). Collapsed:
+ * how many past chats the agent received; expanded: their titles, fetched from
+ * GET /chat/sessions/{id}/memory (titles are resolved at read, never stored),
+ * each opening that chat by its title and previewing its last message on
+ * hover (as the chat list does).
+ * A memory error record is a failed chip whose body says why the persona's
+ * memory is off; an empty one a chip with a count of 0 whose body says memory
+ * is on with nothing to bring yet. A recall record is written only with hits,
+ * so the recall chip has the "on" branch alone — the two rows share it.
  * Chat-store: setActiveSession only.
  */
 
 import { useEffect, useState } from 'react';
-import { Brain, MessageSquare } from 'lucide-react';
+import { Brain, History, MessageSquare } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useChatStore } from '../../store/chat-store';
 import { useTranslation } from '../../i18n';
-import type { ChatMemoryRecord } from '../../types';
+import type { ChatMemoryRecord, ChatRecallRecord } from '../../types';
 import { ToolPlate } from './ToolPlate';
 import { HoverPreviewPopup } from '../HoverPreviewPopup';
 import { useLastMessagePreview } from '../../hooks/useLastMessagePreview';
 import { useRightPanelHoverPreview } from '../../hooks/useRightPanelHoverPreview';
 
-interface ResolvedMemory {
+type Kind = 'memory' | 'recall';
+
+interface ResolvedChats {
   chats: { sid: string; title: string; date: string }[];
   hidden: number;
 }
@@ -30,16 +34,29 @@ interface ResolvedMemory {
 // WHY local: the i18n has no plural forms; Intl picks the CLDR category
 // (en: one/other, ru: one/few/many/other) and each has its own key.
 const ROW_KEY = {
-  one: 'chatMemoryRow_one', few: 'chatMemoryRow_few', many: 'chatMemoryRow_many',
-  two: 'chatMemoryRow_other', zero: 'chatMemoryRow_other', other: 'chatMemoryRow_other',
+  memory: {
+    one: 'chatMemoryRow_one', few: 'chatMemoryRow_few', many: 'chatMemoryRow_many',
+    two: 'chatMemoryRow_other', zero: 'chatMemoryRow_other', other: 'chatMemoryRow_other',
+  },
+  recall: {
+    one: 'chatRecallRow_one', few: 'chatRecallRow_few', many: 'chatRecallRow_many',
+    two: 'chatRecallRow_other', zero: 'chatRecallRow_other', other: 'chatRecallRow_other',
+  },
 } as const;
 
-type ListState = { status: 'loading' } | { status: 'error' } | { status: 'ready'; memory: ResolvedMemory };
+const ROW_ICON = { memory: Brain, recall: History };
+
+type ListState = { status: 'loading' } | { status: 'error' } | { status: 'ready'; chats: ResolvedChats };
+
+function useRowTitle(kind: Kind): (count: number) => string {
+  const { t, language } = useTranslation();
+  return count => t(ROW_KEY[kind][new Intl.PluralRules(language).select(count)], { count });
+}
 
 /** The expanded body. Mounted on every expand (ToolPlate renders its body
  * only while open), so the titles are read fresh each time.
  * WHY no cache: a recorded chat can be renamed, deleted or hidden at any time. */
-function MemoryChats({ sessionId }: { sessionId: string }) {
+function RecordChats({ sessionId, kind }: { sessionId: string; kind: Kind }) {
   const { t } = useTranslation();
   const [list, setList] = useState<ListState>({ status: 'loading' });
   // The chat list's hover preview: the hovered chat's last message (SYSTEM: chat-last-message-preview).
@@ -52,19 +69,22 @@ function MemoryChats({ sessionId }: { sessionId: string }) {
     // set state on it.
     let live = true;
     apiClient.get(`/chat/sessions/${sessionId}/memory`)
-      .then((res: { memory: ResolvedMemory | null }) => {
-        if (live) setList(res.memory ? { status: 'ready', memory: res.memory } : { status: 'error' });
+      .then((res: Record<Kind, ResolvedChats | null>) => {
+        const chats = res[kind];
+        if (live) setList(chats ? { status: 'ready', chats } : { status: 'error' });
       })
       .catch(() => { if (live) setList({ status: 'error' }); });
     return () => { live = false; };
-  }, [sessionId]);
+  }, [sessionId, kind]);
 
   if (list.status === 'loading') return <div className="py-1 text-text-muted">{t('loading')}</div>;
-  if (list.status === 'error') return <div className="py-1 text-text-muted" role="alert">{t('chatMemoryLoadFailed')}</div>;
+  if (list.status === 'error') {
+    return <div className="py-1 text-text-muted" role="alert">{t(kind === 'memory' ? 'chatMemoryLoadFailed' : 'chatRecallLoadFailed')}</div>;
+  }
   const open = (sid: string) => useChatStore.getState().setActiveSession(sid);
   return (
     <div className="flex flex-col">
-      {list.memory.chats.map(c => (
+      {list.chats.chats.map(c => (
         <div key={c.sid} className="flex items-center gap-1 min-w-0 py-1 text-text">
           <MessageSquare size={13} className="shrink-0" />
           {/* WHY only the title: the row's empty rest is not a target. */}
@@ -82,17 +102,30 @@ function MemoryChats({ sessionId }: { sessionId: string }) {
           <span className="shrink-0 text-text-muted">· {c.date.slice(0, 10)}</span>
         </div>
       ))}
-      {list.memory.hidden > 0 && (
-        <div className="py-1 text-text-muted">{t('chatMemoryHidden', { count: list.memory.hidden })}</div>
+      {list.chats.hidden > 0 && (
+        <div className="py-1 text-text-muted">{t('chatMemoryHidden', { count: list.chats.hidden })}</div>
       )}
       <HoverPreviewPopup hover={hover} title={hovered?.title} content={hoverContent} />
     </div>
   );
 }
 
+/** The chip of a record with chats — the one branch both kinds share. */
+function RecordChip({ sessionId, kind, record }: { sessionId: string; kind: Kind; record: ChatMemoryRecord | ChatRecallRecord }) {
+  const rowTitle = useRowTitle(kind);
+  const Icon = ROW_ICON[kind];
+  return (
+    <div {...{ [`data-chat-${kind}`]: 'on' }}>
+      <ToolPlate icon={<Icon size={13} className="text-green" />} title={<span>{rowTitle(record.chats.length)}</span>} bare>
+        <RecordChats sessionId={sessionId} kind={kind} />
+      </ToolPlate>
+    </div>
+  );
+}
+
 export function ChatMemoryRow({ sessionId, record }: { sessionId: string; record: ChatMemoryRecord }) {
-  const { t, language } = useTranslation();
-  const rowTitle = (count: number) => t(ROW_KEY[new Intl.PluralRules(language).select(count)], { count });
+  const { t } = useTranslation();
+  const rowTitle = useRowTitle('memory');
   if (record.error) {
     return (
       <div data-chat-memory="error">
@@ -111,15 +144,11 @@ export function ChatMemoryRow({ sessionId, record }: { sessionId: string; record
       </div>
     );
   }
-  return (
-    <div data-chat-memory="on">
-      <ToolPlate
-        icon={<Brain size={13} className="text-green" />}
-        title={<span>{rowTitle(record.chats.length)}</span>}
-        bare
-      >
-        <MemoryChats sessionId={sessionId} />
-      </ToolPlate>
-    </div>
-  );
+  return <RecordChip sessionId={sessionId} kind="memory" record={record} />;
+}
+
+/** The auto-recall chip: the record is written only with hits, so it has no
+ * error and no empty branch. */
+export function ChatRecallRow({ sessionId, record }: { sessionId: string; record: ChatRecallRecord }) {
+  return <RecordChip sessionId={sessionId} kind="recall" record={record} />;
 }

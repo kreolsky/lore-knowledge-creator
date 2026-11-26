@@ -2,13 +2,17 @@
 
 ## Project members
 
-The project owner invites co-authors in the "Settings" tab, "Access" section. Only the owner sees this section. No email is sent: if the person already has an account with that email, the project appears in their list right away; if there is no account yet, the invitation waits with the "pending" status and takes effect on sign-up. An owner who belongs to a group (see below) invites only members of that group: instead of the email field there is a picker of the group's people with a filter, and people already in the project are not offered. Roles:
+The project owner invites co-authors in the "Settings" tab, "Access" section. Only a project root (see below) sees this section. No email is sent: if the person already has an account with that email, the project appears in their list right away; if there is no account yet, the invitation waits with the "pending" status and takes effect on sign-up. An owner who belongs to a group (see below) invites only members of that group: instead of the email field there is a picker of the group's people with a filter, and people already in the project are not offered. Roles:
 
 - **Editor** — full access: edits documents, works with the agent.
 - **Commentator** — reads and leaves notes, but does not edit documents.
 - **Viewer** — read-only.
 
 Access changes reach open documents at once: a person whose access was revoked loses the project's documents right away, without a reload.
+
+## Project root
+
+A project root is the owner, or a member who joined the project (has a member row) and is either an instance administrator or the moderator of the owner's group. A root manages members and invitations, public links, keys on the index document, and moderates notes; such an elevated member also gets full access to the project regardless of their row's role. The moderator of a different group is not a root.
 
 ## Group access
 
@@ -29,6 +33,8 @@ A published [HTML page](help:html-pages) opens bare, without side panels; the li
 
 "Allow comments" on the link lets anyone holding it leave notes under a name of their choice and see every note on the document with its author's name; the text stays read-only (see [Notes](help:notes)). A guest's page updates as members edit and comment. Revoking the link, deleting or moving the document closes it for guests at once, and the guest's page says the connection is lost.
 
+A reader of a published document or subtree changes the text width with Ctrl+Alt+[ and Ctrl+Alt+] (on macOS Control+Option+[ and ]); the width is remembered per publication in that browser.
+
 ## Privacy
 
 In the "Access" tab, "Privacy" section, two checkboxes:
@@ -45,7 +51,7 @@ In the "Access" tab, "API access" section, you create keys to a document. A key 
 
 The token is shown once — copy it right away.
 
-A key created on the project's index document (the first row of the tree, named after the project) covers the whole project except the Agent System and this guide. Only the project owner can create keys there. On the index document the "Access" tab shows only arrival notifications and API keys: the index cannot be published by a link or moved to another project.
+A key created on the project's index document (the first row of the tree, named after the project) covers the whole project except the Agent System and this guide. Only a project root can create keys there. On the index document the "Access" tab shows only arrival notifications and API keys: the index cannot be published by a link or moved to another project.
 
 ## Arrival notifications
 
@@ -62,7 +68,7 @@ In the "Settings" tab:
 - **Voice Recording** — where to save new recordings: into the current document or a specific one.
 - **Interface** — whether to show images in the references panel as a gallery of previews and whether to list notes and your chats in the "Links" tab (both for every member), and whether to play a sound when the agent finishes or asks for confirmation (for you only).
 - **Group access** — the project's groups and their levels (an owner in a group, or the administrator).
-- **Access** — members and invitations (owner only).
+- **Access** — members and invitations (project root only).
 
 ## Account tiers
 
