@@ -262,9 +262,9 @@ export function ChatInput() {
     // created. Guarded on projectId + an open doc OR ref so the scope is known.
     // Forwards the open reference id when a ref is the active scope so the
     // materialized session is ref-scoped (backend stores document_id = ref id).
-    // INVARIANT: a chat started in chat mode is PROJECT-LEVEL — no document, no reference;
-    // the open document stays only the agent's target. Why: operator ruling — in chat mode
-    // the document on the right follows the chat, it is not the chat's home.
+    // INVARIANT: a chat started in chat mode attaches to the open document/reference like
+    // anywhere else; with nothing open it is PROJECT-LEVEL. Why: operator ruling — a new
+    // chat started while a document is open belongs to that document.
     if (!activeSessionId && projectId && (chatMode || currentDocId || currentReference?.reference_id)) {
       // createSession now resolves null on failure (own toast) instead of
       // throwing — guard it or setDraft('') below would wipe the user's input.
@@ -274,13 +274,13 @@ export function ChatInput() {
       const targetDocId = currentReference?.reference_id ?? currentDocId;
       const created = await createSession({
         projectId,
-        documentId: chatMode ? undefined : currentDocId,
+        documentId: currentDocId,
         model: ghost.ghostModel || undefined,
         // The ghost's explicit reasoning effort rides the same POST; omitted
         // (null) leaves the column absent = Default.
         reasoningEffort: ghost.ghostReasoningEffort ?? undefined,
         systemPromptId: ghost.ghostSystemPromptId,
-        referenceId: chatMode ? undefined : currentReference?.reference_id,
+        referenceId: currentReference?.reference_id,
         agentAuto: ghost.ghostAgentAuto,
         unindexed: ghost.ghostUnindexed,
         // The agent target is ALWAYS the open entity

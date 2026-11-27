@@ -197,6 +197,8 @@ export function ChatHeader() {
   // (proximity is meaningless without an anchor); the list stays neutral
   // either way.
   if (!activeSessionId) {
+    // WHY: in chat mode the centre of a not-yet-created chat stays empty; the header appears with the session.
+    if (chatMode) return null;
     return (
       <div className={`flex items-center gap-2 px-3 py-1 border-b border-border ${chatMode ? 'bg-bg' : 'bg-surface'} min-h-[40px]`}>
         <div className="flex-1 min-w-0">

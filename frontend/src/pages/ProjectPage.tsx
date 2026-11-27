@@ -170,7 +170,6 @@ export function ProjectPage() {
   useReferenceEvents();
   useRecordingHotkey();
   useSidebarHotkey();
-  useTextWidthHotkey(projectId);
 
   const addReference = useAppStore(s => s.addReference);
   const updateReference = useAppStore(s => s.updateReference);
@@ -364,6 +363,8 @@ export function ProjectPage() {
   const chatMode = useUIStore(selectChatMode) && offersChatMode;
   const chatModeRightTab = useUIStore(s => s.chatModeRightTab);
   chatModeRef.current = chatMode;
+  // WHY: chat mode and document mode each remember their own text-column width.
+  useTextWidthHotkey(projectId && (chatMode ? `${projectId}.chat` : projectId));
   useChatDocFollow(chatMode);
 
   const rightTabs: RightTabEntry[] = [];

@@ -1,7 +1,7 @@
 /**
  * Ctrl+Alt+[ / Ctrl+Alt+] global hotkey — steps the document text column through
- * width presets, remembered per scope (a project, or a public share's root document)
- * in this browser.
+ * width presets, remembered per scope (a project's document mode, its chat mode, or a
+ * public share's root document) in this browser.
  */
 // WHY: window keydown, not the CM6 keymap — same reasoning as useSidebarHotkey
 // (see SYSTEM: global-hotkey): the column width is an app-level view setting that
