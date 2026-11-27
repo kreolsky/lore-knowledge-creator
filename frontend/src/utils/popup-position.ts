@@ -57,6 +57,12 @@ export function getRightPanelPopupLeft(rect: DOMRect): number {
   return Math.max(panelLeft - PREVIEW_WIDTH - PREVIEW_GAP, 4);
 }
 
+/** Left edge for a popup beside a LEFT-panel row (chat mode's chat list): opens over the
+ *  center to the row's right, clamped to the viewport. */
+export function getLeftPanelPopupLeft(rect: DOMRect): number {
+  return Math.max(4, Math.min(rect.right + PREVIEW_GAP, window.innerWidth - PREVIEW_WIDTH - 12));
+}
+
 /** Resolve horizontal placement + vertical shift for a hover-preview anchor.
  *  Links inside `.right-panel` (chat markdown links) pin to the
  *  side of the panel; editor links keep near-link placement. Pure + testable. */

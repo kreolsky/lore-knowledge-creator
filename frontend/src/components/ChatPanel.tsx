@@ -18,6 +18,7 @@ import { ChatUnavailableNotice, useChatUnavailable } from './chat/ChatUnavailabl
 import { useTranslation } from '../i18n';
 import { useChatStore, chatAttachSurface } from '../store/chat-store';
 import { useAppStore } from '../store/app-store';
+import { useUIStore, selectChatMode } from '../store/ui-store';
 import { useImageDropHandlers } from '../hooks/useImageDropHandlers';
 import { registerLogoutHandler } from '../store/logout-handlers';
 import {
@@ -40,6 +41,7 @@ export function ChatPanel() {
   const { t } = useTranslation();
   const projectId = useAppStore(s => s.currentProject?.project_id);
   const documentId = useAppStore(s => s.currentDocument?.document_id);
+  const chatMode = useUIStore(selectChatMode);
   const loadSessions = useChatStore(s => s.loadSessions);
   const addPendingFile = useChatStore(s => s.addPendingFile);
   // Files land in the sender's sandbox workspace — a full-access privilege
@@ -78,12 +80,14 @@ export function ChatPanel() {
   }, []);
 
   useEffect(() => {
-    if (!projectId || !documentId) return;
+    // Chat mode loads with the project alone: its chat starts with no document open,
+    // and a document-less listing is gated on the project (server).
+    if (!projectId || (!documentId && !chatMode)) return;
     // Load once per project; document switches within a project are a no-op.
     if (isChatScopeLoaded(projectId)) return;
     markChatScopeLoaded(projectId);
     loadSessions(projectId, documentId);
-  }, [projectId, documentId, loadSessions]);
+  }, [projectId, documentId, chatMode, loadSessions]);
 
 
 

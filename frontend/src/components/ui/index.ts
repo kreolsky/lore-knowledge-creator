@@ -12,7 +12,7 @@ export { DownloadMenu } from './DownloadMenu';
 export { PanelLoading } from './PanelLoading';
 export { Popover } from './Popover';
 export { Dropdown } from './Dropdown';
-export { ListPill } from './ListPill';
+export { ListPill, type ListPillActiveColor } from './ListPill';
 export { PillList } from './PillList';
 export { RowActions } from './RowActions';
 export { SegmentedControl } from './SegmentedControl';

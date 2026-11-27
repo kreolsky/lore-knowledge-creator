@@ -91,7 +91,7 @@ export function AttachmentChips({ images, onRemove, imageMeta = {}, pressing = 0
   };
   const open = openIndex !== null && openIndex < images.length ? openIndex : null;
   return (
-    <div className="flex gap-2 mb-2 flex-wrap">
+    <div className="flex gap-2 mt-1.5 mb-px flex-wrap">
       {images.map((img, i) => (
         <div
           key={i}

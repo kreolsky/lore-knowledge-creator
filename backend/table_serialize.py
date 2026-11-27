@@ -722,7 +722,9 @@ def parse_gfm_table(md: str) -> list[list[str]]:
     return rows
 
 
-def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
+def import_gfm_tables(
+    markdown: str, label: str = "Table", mask: list[bool] | None = None,
+) -> tuple[str, str]:
     """Replace every GFM table BLOCK in `markdown` with a fresh table anchor,
     building the models — the backend mirror of the frontend
     ``importGfmTables`` (the sanctioned UI-side conversion; this is the
@@ -735,11 +737,16 @@ def import_gfm_tables(markdown: str, label: str = "Table") -> tuple[str, str]:
     code is skipped verbatim (``fence_mask``): a pipe table inside a fence is
     code, never a table. Prose (and pipes not forming a table) are left
     untouched.
+
+    ``mask`` overrides the per-line fence state when `markdown` is a splice
+    whose fences are only decided by the text around it (the edit path passes
+    the rows of the post-splice document); it must have one entry per line.
     """
     from markdown_normalize import fence_mask
 
     lines = markdown.split("\n")
-    mask = fence_mask(lines)
+    if mask is None:
+        mask = fence_mask(lines)
     out: list[str] = []
     tables: dict[str, dict] = {}
     i = 0

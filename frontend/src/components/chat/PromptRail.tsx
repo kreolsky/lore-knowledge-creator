@@ -243,6 +243,11 @@ export function PromptRail({ items, containerRef, sessionId, onJump }: Props) {
     listFrameRef.current = requestAnimationFrame(step);
   }, []);
 
+  const panelRef = useRef<HTMLDivElement>(null);
+  // WHY a floor while open: the panel is centred on the rail, so a shorter tab (or topics still
+  // loading) shrinks it around the centre, slides the tabs out from under the pointer and closes it.
+  const [panelFloor, setPanelFloor] = useState(0);
+  useEffect(() => { if (!open) setPanelFloor(0); }, [open]);
   const close = useCallback(() => setOpen(false), []);
   useClickOutside(rootRef, close, open);
 
@@ -326,6 +331,7 @@ export function PromptRail({ items, containerRef, sessionId, onJump }: Props) {
   const pick = (id: string, viaKeyboard: boolean) => jump(id, !viaKeyboard && !isMouse());
   const switchTab = (value: string) => {
     const next: NavigatorTab = value === 'topics' ? 'topics' : 'prompts';
+    setPanelFloor(floor => Math.max(floor, panelRef.current?.offsetHeight ?? 0));
     setTab(next);
     writeTab(next);
   };
@@ -360,6 +366,8 @@ export function PromptRail({ items, containerRef, sessionId, onJump }: Props) {
     >
       {open && (
         <div
+          ref={panelRef}
+          style={{ minHeight: panelFloor || undefined }}
           className={`absolute right-full top-1/2 -translate-y-1/2 mr-1 w-72 max-h-[calc(100%-16px)] flex flex-col pointer-events-auto ${PANEL_CLASS}`}
           role="dialog"
           aria-label={t('promptNavigator')}

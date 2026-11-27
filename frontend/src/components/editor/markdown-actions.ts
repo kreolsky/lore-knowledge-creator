@@ -351,7 +351,12 @@ function createLink(view: EditorView): boolean {
 
   const coords = view.coordsAtPos(cursorPos);
   emit('show-link-suggestions', {
-    pos: cursorPos, coords: coords ? { top: coords.bottom, lineTop: coords.top, left: coords.left } : null, editorView: view,
+    pos: cursorPos, coords: coords ? { top: coords.bottom, lineTop: coords.top, left: coords.left } : null,
+    target: {
+      sliceDoc: (a, b) => view.state.sliceDoc(a, b),
+      apply: (changes, selection) => view.dispatch({ changes, selection }),
+      focus: () => view.focus(),
+    },
     labelPos: empty ? from + 1 : null,
     revert: { from, inserted: linkText, original: selectedText },
   });

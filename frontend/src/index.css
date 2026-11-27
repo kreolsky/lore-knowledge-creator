@@ -2231,3 +2231,16 @@ html.dark .mic-btn-wrap > button.mic-transcribing:hover {
 @media (prefers-reduced-motion: reduce) {
   .chat-running-mark rect { animation: none; }
 }
+
+/* Chat mode: the side columns (chat list, document) share --surface and the center column
+ * (chat header, messages, composer) is one --bg tone. WHY re-pointing --bg inside the
+ * document slot: the editor and DocumentPage paint bg-bg, and plain @theme resolves
+ * --color-bg at :root, so both tokens are overridden. */
+.chat-mode-doc {
+  --bg: var(--surface);
+  --color-bg: var(--surface);
+}
+/* Dark: the composer selectors rest on --bg, which is now the composer panel itself. */
+html.dark .chat-mode-composer {
+  --composer-control-bg: var(--surface2);
+}

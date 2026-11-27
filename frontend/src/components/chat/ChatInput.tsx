@@ -1,17 +1,17 @@
-/** Chat input area — a top row [Persona ▾ (memory state on its icon)] [Hide] [Analyse] … token gauge, then the composer: textarea with send, stop, mic + model / reasoning selectors + auto-apply. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, pendingImageMeta, pressingImages, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode, setChatUnindexed, startGhostChat, ghost overrides. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. */
+/** Chat input area — a top row [Persona ▾ (memory state on its icon)] [Hide] [Analyse] … token gauge, then the composer: textarea with send, stop, mic + model / reasoning selectors + auto-apply. Above it, the context-length nudge strip. Chat-store slices: streaming, dshRunning, inboxQueue, liveSend, discardQueued, activeSessionId, pendingInputFocus, pendingImages, pendingImageMeta, pressingImages, removePendingImage, clearPendingImages, pendingFiles, removePendingFile, clearPendingFiles, draft, setDraft, models, defaultModel, sessions, updateSession, createSession, sendMessage, stopGeneration, setSessionMode, setChatUnindexed, startGhostChat, contextWindows, contextNudge, answerContextNudge, ghost overrides. App-store slices: currentProject, currentDocument, currentReference, documents, accessLevel. */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Brain, Eye, EyeOff, ScrollText, Sparkles } from 'lucide-react';
 import { Button, Dropdown, FieldCheckbox, IconButton } from '../ui';
 import { ChatComposer } from './ChatComposer';
+import { ContextNudgeBanner } from './ContextNudgeBanner';
 import { TodoDock } from './TodoDock';
 import { TokenUsageGauge } from './TokenUsageGauge';
-import { CacheHitIndicator } from './CacheHitIndicator';
 import { useChatStore, chatAttachSurface } from '../../store/chat-store';
 import type { ChatUIMode } from '../../types';
 import { deriveUIMode } from '../../types';
 import { useAppStore } from '../../store/app-store';
-import { useUIStore } from '../../store/ui-store';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
 import { useTranslation } from '../../i18n';
 import { useSimpleVoiceRecording } from '../../hooks/useSimpleVoiceRecording';
@@ -19,6 +19,8 @@ import { useSimpleVoiceRecording } from '../../hooks/useSimpleVoiceRecording';
 import { canSend as computeCanSend } from '../../chat/send-gate';
 import { on, off, emit } from '../../events';
 import { insertAtCaret } from '../../utils/insert-at-caret';
+import type { LinkTarget } from '../../events/event-types';
+import { contextNudgeCrossed, contextNudgeThresholds } from '../../utils/context-nudge';
 import { attachImage } from '../../chat/attach-image';
 import { effectiveCap, appendDraft } from '../../store/chat-store/misc-slice';
 import { useSystemPrompts, useAttachmentBudget } from './chat-input-hooks';
@@ -102,6 +104,8 @@ export function ChatInput() {
   // WHY: vision-capable model ids (backend-derived) drive the EyeOff badge (shown on models NOT in this set).
   const visionModels = useChatStore(s => s.visionModels);
   const contextWindows = useChatStore(s => s.contextWindows);
+  const contextNudge = useChatStore(s => s.contextNudge);
+  const answerContextNudge = useChatStore(s => s.answerContextNudge);
   // WHY: per-model reasoning capability (backend-projected from the gateway's
   // /v1/capabilities) drives the effort dropdown. {} → no dropdown (feature
   // absence, not degradation).
@@ -139,6 +143,7 @@ export function ChatInput() {
   const refOpenMode = useUIStore(s => readRefOpenMode(s.documents[currentDocId ?? ''], s.compactLayout));
   const compactLayout = useUIStore(s => s.compactLayout);
   const currentReference = refIsScope(refOpenMode) ? rawReference : null;
+  const chatMode = useUIStore(selectChatMode);
 
   // Red = the persona asked for memory but its settings turned it off (the
   // tooltip says why).
@@ -193,6 +198,34 @@ export function ChatInput() {
     ? activeSession.reasoning_effort ?? null
     : ghostReasoningEffort;
 
+  // WHY: the nudge strip's show rule. The
+  // thresholds come from the instance dial × the SAME window the gauge shows
+  // (the live frame's cap first, the /models fallback before the first
+  // frame); k = thresholds the chat has crossed. Due while k exceeds the
+  // answered level (context_nudge_level) and no turn is streaming — a frame
+  // that lands mid-turn moves k, the strip waits for the turn to end. AI chats
+  // only: the activeSessionId gate (note chats never render this composer's
+  // row); a ghost has no row to count.
+  const nudgeThresholds = useMemo(() => (activeSession && contextNudge
+    ? contextNudgeThresholds(
+      activeSession.context_window ?? effectiveCap(contextWindows, activeSession.model ?? displayModel),
+      contextNudge.floor_tokens,
+      contextNudge.percents,
+    )
+    : []), [activeSession, contextNudge, contextWindows, displayModel]);
+  const nudgeCrossed = contextNudgeCrossed(nudgeThresholds, activeSession?.context_tokens_used ?? 0);
+  const nudgeDue = !!activeSession && !isStreaming && nudgeCrossed > (activeSession.context_nudge_level ?? 0);
+  const handleNudgeContinue = useCallback(() => {
+    void answerContextNudge(nudgeCrossed);
+  }, [answerContextNudge, nudgeCrossed]);
+  // "New chat" answers first (the row is addressed by activeSessionId, which
+  // startGhostChat clears), then opens the ghost — the answer PATCH runs on,
+  // the old chat keeps its level and a failure rolls it back with a toast.
+  const handleNudgeNewChat = useCallback(() => {
+    void answerContextNudge(nudgeCrossed);
+    startGhostChat();
+  }, [answerContextNudge, nudgeCrossed, startGhostChat]);
+
   // WHY: the shared attachment budget over the turn's PRESSED images (source =
   // GET /chat/models → maxAttachmentMb). Send is disabled and an in-composer error
   // is shown while over the limit, so the user gets explicit feedback instead of a
@@ -229,7 +262,10 @@ export function ChatInput() {
     // created. Guarded on projectId + an open doc OR ref so the scope is known.
     // Forwards the open reference id when a ref is the active scope so the
     // materialized session is ref-scoped (backend stores document_id = ref id).
-    if (!activeSessionId && projectId && (currentDocId || currentReference?.reference_id)) {
+    // INVARIANT: a chat started in chat mode is PROJECT-LEVEL — no document, no reference;
+    // the open document stays only the agent's target. Why: operator ruling — in chat mode
+    // the document on the right follows the chat, it is not the chat's home.
+    if (!activeSessionId && projectId && (chatMode || currentDocId || currentReference?.reference_id)) {
       // createSession now resolves null on failure (own toast) instead of
       // throwing — guard it or setDraft('') below would wipe the user's input.
       // Pass the ghost overrides (agent_auto/system-prompt + agent target =
@@ -238,13 +274,13 @@ export function ChatInput() {
       const targetDocId = currentReference?.reference_id ?? currentDocId;
       const created = await createSession({
         projectId,
-        documentId: currentDocId,
+        documentId: chatMode ? undefined : currentDocId,
         model: ghost.ghostModel || undefined,
         // The ghost's explicit reasoning effort rides the same POST; omitted
         // (null) leaves the column absent = Default.
         reasoningEffort: ghost.ghostReasoningEffort ?? undefined,
         systemPromptId: ghost.ghostSystemPromptId,
-        referenceId: currentReference?.reference_id,
+        referenceId: chatMode ? undefined : currentReference?.reference_id,
         agentAuto: ghost.ghostAgentAuto,
         unindexed: ghost.ghostUnindexed,
         // The agent target is ALWAYS the open entity
@@ -263,11 +299,15 @@ export function ChatInput() {
     setDraft('');
     clearPendingImages();
     clearPendingFiles();
-  }, [canSend, activeSessionId, projectId, currentDocId, currentReference, text, images, uploadedFiles, createSession, sendMessage, clearPendingImages, clearPendingFiles, setDraft]);
+  }, [canSend, activeSessionId, projectId, chatMode, currentDocId, currentReference, text, images, uploadedFiles, createSession, sendMessage, clearPendingImages, clearPendingFiles, setDraft]);
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       handleSend();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && textareaRef.current) {
+      e.preventDefault();
+      openLinkPicker(textareaRef.current);
     }
   }, [handleSend]);
 
@@ -425,9 +465,6 @@ export function ChatInput() {
                 activeSession?.model ?? displayModel,
               )}
             />
-            {/* Prompt-cache hit share of the last turn, beside the gauge. Absent
-                until a turn completes with cache accounting (see CacheHitIndicator). */}
-            <CacheHitIndicator />
           </div>
         )}
       </div>
@@ -437,7 +474,7 @@ export function ChatInput() {
   const warnings = (
     <>
       {attachmentsOverLimit && (
-        <div className="mb-2 text-ui-sm text-danger px-2 py-1 border border-danger/40 bg-danger/5">
+        <div className="mt-1.5 mb-px text-ui-sm text-danger px-2 py-1 border border-danger/40 bg-danger/5">
           {t('attachmentsExceedLimit', {
             used: (projectedAttachmentBytes / (1024 * 1024)).toFixed(1),
             limit: maxAttachmentMb,
@@ -450,9 +487,21 @@ export function ChatInput() {
           this shows whenever the agent service is down (no readonly/ask fallback
           exists). */}
       {activeSessionId && !agentAvailable && (
-        <div className="mb-2 text-ui-sm text-amber px-2 py-1 border border-amber/40 bg-amber/5">
+        <div className="mt-1.5 mb-px text-ui-sm text-amber px-2 py-1 border border-amber/40 bg-amber/5">
           {t('chatAgentUnavailable')}
         </div>
+      )}
+
+      {/* Context-length nudge: the copy names what
+          carries over — the memory-ON persona's chats are saved and recalled
+          into the next chats on their own; without one, a new chat starts
+          from scratch. */}
+      {nudgeDue && (
+        <ContextNudgeBanner
+          memoryOn={!!effectiveSystemPromptId && memoryPersonas.has(effectiveSystemPromptId)}
+          onNewChat={handleNudgeNewChat}
+          onContinue={handleNudgeContinue}
+        />
       )}
     </>
   );
@@ -565,3 +614,35 @@ export function ChatInput() {
   );
 }
 
+/**
+ * Cmd+K in the composer: the editor's link picker, writing into the draft.
+ * WHY through setDraft, not the DOM value: the composer is controlled by the shared
+ * draft (see SYSTEM: chat-draft); the caret is restored after the re-render.
+ */
+function openLinkPicker(el: HTMLTextAreaElement): void {
+  const target: LinkTarget = {
+    sliceDoc: (a, b) => useChatStore.getState().draft.slice(a, b),
+    apply: (changes, caret) => {
+      let next = useChatStore.getState().draft;
+      // Positions address the pre-change text: splice from the end backwards.
+      for (const c of [...changes].sort((x, y) => y.from - x.from)) {
+        next = next.slice(0, c.from) + c.insert + next.slice(c.to);
+      }
+      useChatStore.getState().setDraft(next);
+      requestAnimationFrame(() => el.setSelectionRange(caret.anchor, caret.head ?? caret.anchor));
+    },
+    focus: () => el.focus(),
+  };
+  const from = el.selectionStart;
+  const original = target.sliceDoc(from, el.selectionEnd);
+  const inserted = `[${original}]()`;
+  const pos = from + inserted.length - 1;
+  target.apply([{ from, to: el.selectionEnd, insert: inserted }], { anchor: pos });
+  // No coordsAtPos on a textarea: anchor to its box; the popup flips above when needed.
+  const r = el.getBoundingClientRect();
+  emit('show-link-suggestions', {
+    pos, coords: { top: r.bottom, lineTop: r.top, left: r.left }, target,
+    labelPos: original ? null : from + 1,
+    revert: { from, inserted, original },
+  });
+}

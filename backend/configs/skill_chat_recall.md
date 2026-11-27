@@ -1,11 +1,12 @@
 ---
 name: chat-recall
-description: Use when the user refers to what was said in another of their chats in this project, or asks to list, read or analyse one of their chats. «мы обсуждали», «я говорил в другом чате», «что мы тогда решили», «разбери чат», «список чатов»; we discussed, in the other chat. Saving facts from this conversation is the memory skill.
+description: Use when the user refers to what was said in another of their chats in this project, or asks to list, read or analyse one of their chats. «мы обсуждали», «я говорил в другом чате», «что мы тогда решили», «разбери чат», «список чатов»; we discussed, in the other chat, export this chat. Saving facts from this conversation is the memory skill.
 tools:
   - search_my_chats
   - list_my_chats
   - read_my_chat
   - view_chat_image
+  - export_chat
 ---
 
 # Chat recall
@@ -44,6 +45,10 @@ user asks what their chats were about), then `read_my_chat` with `topics_only: t
 exception: a topic's `marks` carry the user's own `quote` — rely on it as said then.
 A topic without a mark says nothing about what they like.
 `topics: null` means no table of contents yet — read the chat.
+
+To process a chat with code (count, filter, convert, chart): `export_chat` writes it whole
+as JSON into the sandbox and returns the `path`; then work on that file with `sandbox_bash`.
+Omit `chat_id` to export this conversation.
 
 A hidden (`unindexed`) chat is invisible to these tools — if the user asks for one,
 ask them to turn hiding off first.

@@ -11,7 +11,7 @@ import { Send, Square } from 'lucide-react';
 import { Button, FieldTextarea } from '../ui';
 import { useVerticalDragResize } from '../../hooks/useVerticalDragResize';
 import { useTranslation } from '../../i18n';
-import { useUIStore } from '../../store/ui-store';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { MicButton } from './shared/MicButton';
 import { AttachmentChips } from './shared/AttachmentChips';
 import type { PendingFile } from '../../store/chat-store/types';
@@ -106,6 +106,7 @@ export function ChatComposer({
 }: Props) {
   const { t } = useTranslation();
   const compactLayout = useUIStore(s => s.compactLayout);
+  const chatMode = useUIStore(selectChatMode);
   const { height: inputHeight, handleRef: dragHandleRef } = useVerticalDragResize({
     defaultHeight: 300,
     // WHY: on a wide layout the form never shrinks below 200 (a compact layout sizes it by a two-row textarea).
@@ -114,11 +115,12 @@ export function ChatComposer({
     maxHeight: 600,
   });
 
-  // Variant theming: notes use warm surfaces; AI uses the neutral surface.
+  // Variant theming: notes use warm surfaces; AI uses the neutral surface — in chat mode the
+  // page bg, so the center column (header, messages, composer) is one homogeneous tone.
   const panelBg =
     variant === 'note'
       ? 'bg-[var(--warm-tint)]'
-      : 'bg-surface';
+      : chatMode ? 'bg-bg chat-mode-composer' : 'bg-surface';
   const panelBorderClass =
     variant === 'note'
       ? 'border-[var(--warm-sep)]'
@@ -175,7 +177,7 @@ export function ChatComposer({
         style={compactLayout ? undefined : { minHeight: inputHeight }}
         onKeyDown={handleEscape}
       >
-        <div className="flex flex-col h-full">
+        <div className={`flex flex-col h-full${chatMode ? ' mx-auto max-w-[var(--content-max-width)]' : ''}`}>
           {/* Top area: AI controls + shared attachment chips + warnings */}
           {/* WHY pt-[5px]: with the AI controls row's mb-px and the textarea wrapper's
               py-1 (4px), the 30px controls get 5px above and below — the same as the

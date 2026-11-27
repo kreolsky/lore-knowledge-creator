@@ -57,9 +57,15 @@ class SessionCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_invariants(self) -> "SessionCreate":
-        # INVARIANT: at least one of document_id / reference_id must be provided  Why: a chat session needs a document context to scope against (the doc it's about, or one of its references); without either there is no anchor and no retrieval/inherit target.
-        if not self.document_id and not self.reference_id:
-            raise ValueError("Either document_id or reference_id is required")
+        # INVARIANT: a note is document-owned — is_note requires document_id or
+        # reference_id.  Why: a note is an anchored comment thread on ONE document's
+        # text (its anchor pair, or its document-wide scope, resolves against that
+        # document, and the note list's branch walk reads it), so a note with no
+        # document has nothing to attach to. An AI chat may have neither: it is a
+        # project-level chat (agent-first mode starts one with no document open);
+        # its context is the per-turn open_doc_id and the tools it calls.
+        if self.is_note and not self.document_id and not self.reference_id:
+            raise ValueError("A note session requires document_id or reference_id")
         # INVARIANT: a note is anchored (both positions) or anchorless (neither).
         # Why: anchorless notes are first-class (document-wide / pipeline-error, the
         # "Add Note" button in NotesPanel); a lone position is a half-specified range.
@@ -118,6 +124,15 @@ class SessionUpdate(BaseModel):
     # Toggles the recall-index opt-out for the WHOLE conversation (every branch
     # and compaction continuation); 400 on a note session; null is a no-op.
     unindexed: bool | None = None
+    # WHY: PATCH-able like reasoning_effort
+    # (model_fields_set semantics — explicit null clears to NONE = 0). The
+    # context-length nudge level: how many of the
+    # configured thresholds the person already answered. The client writes k
+    # when a banner is answered; the server stores the number and derives
+    # nothing — the live window is known only to the turn's stream. Bounded
+    # 0..3: at most three thresholds per chat. Silently ignored for note
+    # sessions, like every AI-only field.
+    context_nudge_level: int | None = Field(None, ge=0, le=3)
 
 
 class NoteAnchorUpdate(BaseModel):

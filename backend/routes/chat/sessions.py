@@ -108,6 +108,9 @@ async def _require_session_access(session_id: str, user: dict) -> dict:
 async def _guard_create_access(body: SessionCreate, user: dict) -> None:
     """404 without project access; 403 for a readonly note or a non-full AI chat."""
     target_did = body.reference_id or body.document_id
+    # WHY: a project-level AI chat (neither document_id nor reference_id) is gated
+    # on the project it is created in — the same full-access rule below applies
+    # to that answer, so the gate never falls open for a document-less body.
     access = (
         await get_document_access(target_did, user)
         if target_did else await get_project_access(body.project_id, user)
@@ -131,7 +134,12 @@ async def _guard_create_access(body: SessionCreate, user: dict) -> None:
 
 @router.post("/sessions", status_code=201)
 async def create_session(body: SessionCreate, user: dict = Depends(get_current_user), db: AsyncSurreal = Depends(get_db)):
-    """Create a new chat session scoped to a document or reference.
+    """Create a new chat session: on a document or reference, or at project level.
+
+    An AI chat may carry neither document_id nor reference_id — a project-level
+    chat (agent-first mode starts one with no document open); its access gate
+    is the project itself. A note is document-owned (the model refuses it
+    without one).
 
     Note-chats (body.is_note=true) need at least commentator access: they are
     the comment channel, and readonly users cannot start one.

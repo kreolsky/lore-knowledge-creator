@@ -34,6 +34,14 @@
   .actions { opacity: 1; background: linear-gradient(to right, transparent 0px, var(--surface) 16px); }
   .active { background: linear-gradient(to right, transparent 0px, var(--surface2) 16px); }
 }
+/* Plate over a row selected with the tree fill (ListPill .activeTree = surface3). */
+.actions.backdropTree {
+  background: linear-gradient(to right, transparent 0px, var(--surface3) 16px);
+}
+/* Buttons hover on surface3 by default — one step further so the hover still reads. */
+.backdropTree button:not(:global(.bg-red)):hover {
+  background: var(--surface4);
+}
 /* Blue backdrop for the open/active reference (functional: marks which ref is open). */
 .activeBlue {
   background: linear-gradient(to right, transparent 0px, var(--ref-strong) 16px);

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import { useChatStore } from '../../store/chat-store';
-import { useUIStore } from '../../store/ui-store';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { useAppStore } from '../../store/app-store';
 import { selectOpenPageLockedBy, LOCK_PENDING } from '../../utils/page-lock';
 import { treeDistance, PROJECT_ROOT, listHiddenDocIds } from '../../utils/document-sort';
@@ -67,7 +67,9 @@ export function useSortedSessions() {
   const currentDocId = useAppStore(s => s.currentDocument?.document_id) ?? null;
   const { positionDocId, pageLocked } = useChatListPosition();
   const documents = useAppStore(s => s.documents);
-  const sortByProximity = useUIStore(s => s.getChatSortByProximity(currentDocId));
+  // WHY chat mode is recency-only: its anchor (the right-panel document) moves with the
+  // agent's writes, so a proximity order would reshuffle the list mid-turn.
+  const sortByProximity = useUIStore(s => !selectChatMode(s) && s.getChatSortByProximity(currentDocId));
 
   return useMemo(() => {
     // chats_unindexed projection — hidden subtree hosts drop out, the ACTIVE

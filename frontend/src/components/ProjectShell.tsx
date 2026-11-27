@@ -29,7 +29,7 @@ import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useL
 import { PanelLeft, PanelRight, Pin, PinOff, X } from 'lucide-react';
 import { useResizer } from '../hooks/useResizer';
 import { useDocumentNavigation } from '../navigation/useDocumentNavigation';
-import { useUIStore, type RightTab } from '../store/ui-store';
+import { useUIStore, type ChatModeTab, type RightTab, type SidebarTab } from '../store/ui-store';
 import { useNoteStore } from '../store/note-store';
 import { useAppStore } from '../store/app-store';
 import { useTranslation } from '../i18n';
@@ -38,7 +38,9 @@ import { UserControls } from './UserControls';
 import { IconButton, PanelLoading } from './ui';
 import s from './Sidebar.module.css';
 
-export type LeftTab = 'docs' | 'toc';
+export type LeftTab = SidebarTab;
+/** A right-panel tab: a per-document tab, or chat mode's document tab. */
+export type ShellTab = RightTab | 'doc';
 
 // Compact tab rows: every cell is a square as wide as the row is tall.
 const COMPACT_TAB_CLS = '!w-auto !h-full aspect-square';
@@ -46,7 +48,7 @@ const COMPACT_CELL_CLS = 'h-full aspect-square shrink-0 flex items-center justif
 
 /** A renderable right-tab entry. Parent filters/extends this list per role. */
 export interface RightTabEntry {
-  tab: RightTab;
+  tab: ShellTab;
   icon: React.ReactNode;
   title: string;
   renderPanel: () => React.ReactNode;
@@ -65,6 +67,9 @@ export interface RightTabEntry {
    *  extraction (flat config dropped the inter-item layout chrome) — pinned here
    *  to keep a future contributor from re-flattening the bar. */
   aside?: boolean;
+  /** Stays mounted (hidden) while another tab is active — chat mode's document tab, whose
+   *  DocumentPage owns the URL → document commit and must run whatever tab is shown. */
+  keepMounted?: boolean;
 }
 
 /** A renderable left-tab entry. */
@@ -96,7 +101,7 @@ interface ProjectShellProps {
   /** Whether the right-panel content is ready to mount (authed: prefs+doc committed; public: true). */
   rightPanelReady: boolean;
   /** Active right tab (parent-computed; role-validated for authed mode). */
-  effectiveRightTab: RightTab | null;
+  effectiveRightTab: ShellTab | null;
   /** Initial sidebar open state — used only on first mount (public passes true). */
   initialSidebarOpen?: boolean;
   /** Initial right-panel open state — used only on first mount (public passes true). */
@@ -106,7 +111,7 @@ interface ProjectShellProps {
   /** Optional callback fired AFTER a right-tab click — lets the parent clear snapshot
    *  preview / take any tab-specific side effect (authed-only). `fromTab` is the tab
    *  that was VISIBLE before the click (null while the right panel was closed). */
-  onRightTabClick?: (tab: RightTab, fromTab: RightTab | null) => void;
+  onRightTabClick?: (tab: ShellTab, fromTab: ShellTab | null) => void;
   /** Optional overlays rendered at the shell root (SnapshotModal, SelectionToolbar, ...). */
   overlays?: React.ReactNode;
   /** Optional header slot — defaults to <Header/>. */
@@ -172,6 +177,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
 
   const sidebarOpenStored = useUIStore(s => s.sidebarOpen);
   const leftWidth = useUIStore(s => s.panelWidths.left);
+  const chatsLeftWidth = useUIStore(s => s.panelWidths.chatsLeft);
   const rightWidth = useUIStore(s => s.panelWidths.right);
 
   // Effective left tab: if the persisted sidebarTab isn't among the rendered
@@ -184,6 +190,13 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     leftTabs.some(e => e.tab === sidebarTab) ? sidebarTab : leftTabs[0]?.tab;
   // Per-doc right-panel state. null docId → ORPHAN slice (public mode).
   const rightPanelOpenStored = useUIStore(s => (s.documents[rightPanelDocId ?? '__orphan__']?.rightPanelOpen));
+  // Chat mode: the chat list on the left, the chat in the center, the document on the right.
+  // WHY its own open flag (chatModeRightOpen): the panel is the mode's second window, and the
+  // per-document rightPanelOpen would open/close it on every navigation of that document.
+  const chatMode = effectiveSidebarTab === 'chats';
+  const setChatModeRightTab = useUIStore(s => s.setChatModeRightTab);
+  const chatModeRightOpen = useUIStore(s => s.chatModeRightOpen);
+  const setChatModeRightOpen = useUIStore(s => s.setChatModeRightOpen);
 
   // The Shell uses the store as the source of truth for open state. On first
   // mount (when the per-doc slice is missing or the global sidebarOpen is the
@@ -203,7 +216,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   }, []);
 
   // Right panel state: prefer stored value; fall back to initialRightOpen.
-  const rightPanelOpen = rightPanelOpenStored ?? initialRightOpen;
+  const rightPanelOpen = chatMode ? chatModeRightOpen : (rightPanelOpenStored ?? initialRightOpen);
   const sidebarOpen = sidebarOpenStored;
 
   // ── Auto-hiding left panel (unpinned, desktop only) ─────────────────────
@@ -224,11 +237,23 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     defaultWidth: 220,
     minWidth: 140,
     maxWidth: 500,
-    initialWidth: leftWidth ?? undefined,
+    initialWidth: (chatMode ? chatsLeftWidth ?? leftWidth : leftWidth) ?? undefined,
     isOpen: floating ? hoverOpen : sidebarOpen,
-    onWidthChange: (w) => setPanelWidth('left', w),
+    // WHY two widths: the chat list and the document tree want different room; docs mode's
+    // width stays the one shared with the admin/cabinet asides (useSectionAsideWidth).
+    onWidthChange: (w) => setPanelWidth(chatMode ? 'chatsLeft' : 'left', w),
     onOpenChange: (open) => (floating ? setHoverOpen(open) : setSidebarOpen(open)),
   });
+
+  // The resizer seeds its width once; a mode switch re-seeds it from that mode's stored width.
+  const modeWidth = chatMode ? chatsLeftWidth ?? leftWidth : leftWidth;
+  const setSidebarWidth = sidebarResizer.setWidth;
+  const prevChatModeRef = useRef(chatMode);
+  useEffect(() => {
+    if (prevChatModeRef.current === chatMode) return;
+    prevChatModeRef.current = chatMode;
+    if (modeWidth != null) setSidebarWidth(Math.min(500, Math.max(140, modeWidth)));
+  }, [chatMode, modeWidth, setSidebarWidth]);
 
   const cancelHoverClose = useCallback(() => {
     if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current);
@@ -255,7 +280,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     initialWidth: rightWidth ?? undefined,
     isOpen: rightPanelOpen,
     onWidthChange: (w) => setPanelWidth('right', w),
-    onOpenChange: (open) => setRightPanelOpen(rightPanelDocId, open),
+    onOpenChange: (open) => (chatMode ? setChatModeRightOpen(open) : setRightPanelOpen(rightPanelDocId, open)),
   });
 
   // Closing kills a live technical-tab overlay, like the desktop close (setRightPanelOpen).
@@ -283,8 +308,16 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
     }
   }, [compact, floating, sidebarResizer, effectiveSidebarTab, setSidebarTab]);
 
-  const handleRightTabClick = useCallback((tab: RightTab) => {
-    if (compact) {
+  const handleRightTabClick = useCallback((tab: ShellTab) => {
+    if (chatMode) {
+      // Chat mode's tabs are mode state; a click on the visible tab closes the panel and the
+      // next click reopens it on that tab — the same gesture as docs mode.
+      if (!rightIsOpen) { setChatModeRightTab(tab as ChatModeTab); rightPanelResizer.open(); }
+      else if (effectiveRightTab === tab) rightPanelResizer.close();
+      else setChatModeRightTab(tab as ChatModeTab);
+    } else if (tab === 'doc') {
+      return;
+    } else if (compact) {
       // Tab-only write — the compact panel is already open (its tab row is visible).
       setRightPanelTab(rightPanelDocId, tab);
     } else if (!rightPanelResizer.isOpen) {
@@ -298,7 +331,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
       setRightPanelTab(rightPanelDocId, tab);
     }
     onRightTabClick?.(tab, rightIsOpen ? effectiveRightTab : null);
-  }, [compact, rightPanelResizer, rightIsOpen, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
+  }, [chatMode, setChatModeRightTab, compact, rightPanelResizer, rightIsOpen, effectiveRightTab, setRightPanelTab, rightPanelDocId, onRightTabClick]);
 
   // ── Imperative handle for parent's event handlers ───────────────────────
   useImperativeHandle(ref, () => ({
@@ -527,12 +560,21 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
               <PanelLoading />
             </aside>
           )}
-          {rightIsOpen && rightPanelReady && effectiveRightTab && (
+          {/* WHY a closed chat-mode panel stays mounted (hidden): its document tab's
+              DocumentPage owns the URL → document commit (keepMounted). */}
+          {(rightIsOpen || chatMode) && rightPanelReady && effectiveRightTab && (
             <aside
-              className={`right-panel${effectiveRightTab === 'notes' && threadOpen ? ' right-panel--notes-thread' : ''}`}
+              className={`right-panel${!rightIsOpen ? ' !hidden' : ''}${effectiveRightTab === 'notes' && threadOpen ? ' right-panel--notes-thread' : ''}`}
             >
+              {/* WHY one wrapper at a fixed position, only `hidden` toggling: switching
+                  tabs must not remount a keep-mounted panel (the editor and its session). */}
+              {rightTabs.filter(e => e.keepMounted).map(entry => (
+                <div key={entry.tab} className={`flex-1 flex-col min-h-0 ${entry.tab === effectiveRightTab ? 'flex' : 'hidden'}`}>
+                  {entry.renderPanel()}
+                </div>
+              ))}
               {(() => {
-                const entry = rightTabs.find(e => e.tab === effectiveRightTab);
+                const entry = rightIsOpen ? rightTabs.find(e => e.tab === effectiveRightTab && !e.keepMounted) : undefined;
                 return entry ? entry.renderPanel() : null;
               })()}
             </aside>

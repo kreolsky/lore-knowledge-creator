@@ -187,22 +187,28 @@ def _reject_overlapping_edits(resolved: list[dict]) -> None:
             )
 
 
-def _splice_edge_state(
-    content: str, mask: list[bool], from_cp: int, to_cp: int,
-) -> tuple[bool, str | None, str | None]:
-    """(edge-clean?, prev-before, after-first) for a splice — the fence gate on
-    from_cp plus the two surviving neighbour lines the post-splice skip rule
-    needs when a converted anchor touches conv_new's first/last line."""
-    if from_cp > 0:
-        if mask[content.count("\n", 0, from_cp)]:
-            return False, None, None  # starts inside a fence of the live content
-    prev_before = content[:from_cp].rsplit("\n", 1)[-1] if from_cp > 0 else None
-    after_first = content[to_cp:].split("\n", 1)[0] if to_cp < len(content) else None
-    return True, prev_before, after_first
+def _post_splice_fence_mask(
+    new_text: str, content: str, from_cp: int, to_cp: int,
+) -> list[bool]:
+    """Per-line fence state of ``new_text`` as it will stand in the document:
+    the fence scan runs over the post-splice text and the rows new_text
+    occupies are sliced out (its first row shares the prefix's last line).
+
+    # WHY: fences are judged on the text AS IT WILL STAND, never on new_text
+    # alone — an append anchored on the doc's closing fence line carries that
+    # line into new_text, where a standalone scan reads it as an OPENER and
+    # masks the authored table; a splice starting inside a fence may close it
+    # before its table. A table inside a fence that stays open is still masked.
+    """
+    from markdown_normalize import fence_mask
+
+    post = content[:from_cp] + new_text + content[to_cp:]
+    start = content.count("\n", 0, from_cp)
+    return fence_mask(post.split("\n"))[start:start + new_text.count("\n") + 1]
 
 
 def _anchors_own_their_lines(
-    conv_new: str, content: str, mask: list[bool], from_cp: int, to_cp: int,
+    conv_new: str, content: str, from_cp: int, to_cp: int,
 ) -> bool:
     """The post-splice skip rule for edit-path table conversion: True when every
     converted anchor in ``conv_new`` (the rewritten new_text) sits on a line of
@@ -210,8 +216,8 @@ def _anchors_own_their_lines(
 
     Per anchor line: the neighbour lines must hold no unescaped ``|`` (a bare
     pipe there means a legacy pipe block whose edge rows the conversion would
-    orphan), and the splice must not start inside a fenced block of the live
-    content (a table authored inside a fence is code).
+    orphan). Fenced tables never reach here — the post-splice fence mask kept
+    them text (``_post_splice_fence_mask``).
 
     An anchor interior to conv_new is already newline-locked on both sides; a
     table touching conv_new's FIRST/LAST line can glue to the surviving
@@ -221,11 +227,8 @@ def _anchors_own_their_lines(
     """
     from table_serialize import _TABLE_ANCHOR, _row_has_pipe
 
-    edge_clean, prev_before, after_first = _splice_edge_state(
-        content, mask, from_cp, to_cp,
-    )
-    if not edge_clean:
-        return False
+    prev_before = content[:from_cp].rsplit("\n", 1)[-1] if from_cp > 0 else None
+    after_first = content[to_cp:].split("\n", 1)[0] if to_cp < len(content) else None
     from_cp_line_start = from_cp == 0 or content[from_cp - 1] == "\n"
     to_cp_line_end = to_cp >= len(content) or content[to_cp] == "\n"
 
@@ -257,28 +260,29 @@ def _convert_resolved_edit_tables(
     resolved: list[dict], current_content: str,
 ) -> tuple[dict[str, list[list[str]]] | None, list[dict]]:
     """GFM tables → objects for agent-authored EDITS, staged per resolved edit:
-    convert the new_text alone, gate the result on the post-splice skip rule,
-    and only then bound the cells (the authored-cell 400 fires for edits that
-    WOULD convert — a fenced or partial splice of the same body stays text).
+    convert the new_text under its post-splice fence state, gate the result on
+    the post-splice skip rule, and only then bound the cells (the authored-cell
+    400 fires for edits that WOULD convert — a fenced or partial splice of the
+    same body stays text).
     Accepted edits get their ``new_text`` rewritten to anchor form; the fresh
     models are returned for ``route_document_edits(new_tables=…)`` (the anchor
     splices and the model builds land in ONE transaction there) plus the
     ``tables`` result field. Callers run this BEFORE the checkpoint, so a
     refusal writes nothing.
     """
-    from markdown_normalize import fence_mask
-
     from table_serialize import extract_table_labels, import_gfm_tables
 
-    mask = fence_mask(current_content.split("\n"))
     new_tables: dict[str, list[list[str]]] = {}
     tables_out: list[dict] = []
     for r in resolved:
-        conv_new, tables_json = import_gfm_tables(r["new_text"])
+        mask = _post_splice_fence_mask(
+            r["new_text"], current_content, r["from_cp"], r["to_cp"],
+        )
+        conv_new, tables_json = import_gfm_tables(r["new_text"], mask=mask)
         if tables_json == "{}":
             continue  # nothing tabular authored in this splice
         if not _anchors_own_their_lines(
-            conv_new, current_content, mask, r["from_cp"], r["to_cp"],
+            conv_new, current_content, r["from_cp"], r["to_cp"],
         ):
             continue
         from agent.table_writes import reject_table_overflow

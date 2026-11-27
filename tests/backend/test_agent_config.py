@@ -156,6 +156,7 @@ async def test_build_prompt_and_skill_docs_wires_all_three_layers(
     # The structure pack: the chat move rides it — structure, not recall.
     assert _front(shipped["structure"]["content"])["tools"] == [
         "move_document", "get_links", "reprocess_reference", "move_chat",
+        "set_chat_persona",
     ]
     # The default skills carry the document tools that were the always-active
     # core — reading split from writing, so a persona can start with one.

@@ -43,6 +43,13 @@ export type WsEventKey = `ws:${(typeof WS_EVENT_TYPES)[number]}`;
 /** What `createLink` wrote over the selection, so a cancelled link picker can put it back. */
 export interface LinkRevert { from: number; inserted: string; original: string }
 
+/** Where the link picker writes: a CM6 view or the chat composer's textarea. */
+export interface LinkTarget {
+  sliceDoc(from: number, to: number): string;
+  apply(changes: { from: number; to: number; insert: string }[], caret: { anchor: number; head?: number }): void;
+  focus(): void;
+}
+
 export type AccessVia = 'tree' | 'link' | 'search' | 'links_panel' | 'chat' | 'url';
 
 export interface EventMap {
@@ -155,7 +162,7 @@ export interface EventMap {
   'create-note-from-editor': { noteId: string };
 
   // ── Editor ──
-  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; editorView: EditorView; labelPos?: number | null; revert: LinkRevert };
+  'show-link-suggestions': { pos: number; coords: { top: number; lineTop: number; left: number } | null; target: LinkTarget; labelPos?: number | null; revert: LinkRevert };
   'editor-selection-change': { empty: boolean };
   'editor-doc-changed': void;
   // An image was clicked for preview. `element` is the embed; `editorView` the view rendering it.

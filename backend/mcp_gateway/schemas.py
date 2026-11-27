@@ -371,7 +371,7 @@ _ID_PROPERTIES: frozenset[str] = frozenset({
     "source_doc_id", "under_document_id", "start_id", "after_id", "fact_id",
     "absorb_id", "ids", "table_id", "message_id", "chat_id", "run_id",
     "config_id", "staged_id", "checkpoint_id", "from_checkpoint_id",
-    "before_checkpoint_id", "subject_user_ids", "project_id",
+    "before_checkpoint_id", "subject_user_ids", "project_id", "persona_id",
 })
 _OUTPUT_ONLY_ID_PROPERTIES: frozenset[str] = frozenset({"id"})
 

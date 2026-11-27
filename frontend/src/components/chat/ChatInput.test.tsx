@@ -41,6 +41,7 @@ vi.mock('../../store/ui-store', () => {
       getState: () => uiState,
       subscribe: vi.fn(),
     }),
+    selectChatMode: () => false,
   };
 });
 vi.mock('../../api/client', () => ({

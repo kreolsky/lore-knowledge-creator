@@ -1,12 +1,12 @@
 /** Chat header — static title (double-click to rename) + new chat / goto-parent / change-parent on the left, [Delete][Download] on the right (Download in the far-right corner). Chat-store slices: sessions, activeSessionId, modelsLoaded, startGhostChat, deleteSession, updateSession, loadModels. App-store slices: currentDocument, currentReference, documents. */
 
 import { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Trash2, Download, FileText, Network, Clock, FolderUp } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Download, FileText, Network, Clock, FolderUp } from 'lucide-react';
 import { Button, IconButton, InlineRenameInput, Popover } from '../ui';
 import { ParentPickerPopup } from '../ParentPickerPopup';
 import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
-import { useUIStore } from '../../store/ui-store';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slice';
 import { navigateToDocKeepingChat } from '../../chat/navigate';
 import { emit } from '../../events';
@@ -35,6 +35,8 @@ export function ChatHeader() {
   // ghost plaque flips this; useSortedSessions consumes it to switch sort modes.
   const chatSortByProximity = useUIStore(s => s.getChatSortByProximity(currentDocumentId));
   const setChatSortByProximity = useUIStore(s => s.setChatSortByProximity);
+  // Chat mode carries its sort toggle on the chat list (ChatModeList).
+  const chatMode = useUIStore(selectChatMode);
 
   const { t } = useTranslation();
   const deleteAction = useArmedAction();
@@ -196,11 +198,11 @@ export function ChatHeader() {
   // either way.
   if (!activeSessionId) {
     return (
-      <div className="flex items-center gap-2 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+      <div className={`flex items-center gap-2 px-3 py-1 border-b border-border ${chatMode ? 'bg-bg' : 'bg-surface'} min-h-[40px]`}>
         <div className="flex-1 min-w-0">
           <span className="block text-sm font-medium text-text-muted truncate">{t('chatEmptyHint')}</span>
         </div>
-        {currentDocumentId && (
+        {currentDocumentId && !chatMode && (
           <IconButton
             className={chatSortByProximity ? 'text-accent-text' : 'text-text-muted'}
             title={chatSortByProximity ? t('chatSortByRecency') : t('chatSortByProximity')}
@@ -214,9 +216,11 @@ export function ChatHeader() {
   }
 
   return (
-    <div className="flex items-center gap-1 px-3 py-1 border-b border-border bg-surface min-h-[40px]">
+    <div className={`flex items-center gap-1 px-3 py-1 border-b border-border ${chatMode ? 'bg-bg' : 'bg-surface'} min-h-[40px]`}>
+      {/* WHY a plus in chat mode: the list stays visible on the left, so the button starts a
+          chat rather than going "back" to a list that replaces the conversation. */}
       <Button variant="primary" onClick={handleNewChat}>
-        <ArrowLeft size={13} />
+        {chatMode ? <Plus size={13} /> : <ArrowLeft size={13} />}
         {t('chatNew')}
       </Button>
 

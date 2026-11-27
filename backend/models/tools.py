@@ -204,6 +204,14 @@ class ToolListMyChats(BaseModel):
     with_topics: bool = False
 
 
+class ToolExportChat(BaseModel):
+    """`export_chat` body — one visible chat, whole, as a JSON file in the
+    caller's sandbox workspace. `chat_id` omitted ⇒ the caller's CURRENT
+    session; the target set is read_my_chat's own."""
+
+    chat_id: str | None = Field(default=None, min_length=1)
+
+
 class ToolReadMyChat(BaseModel):
     """`read_my_chat` body — one visible chat from its first turn, in pages of
     whole turns. A message cut by the page budget is finished through
@@ -559,6 +567,21 @@ class ToolMoveChat(BaseModel):
 
     chat_id: str | None = None
     document_id: str | None
+    apply: ToolApply = ToolApply.confirm
+
+
+class ToolSetChatPersona(BaseModel):
+    """set_chat_persona body — the persona a chat of the caller runs under.
+
+    # ARCH: the surface over the PATCH path's own command
+    # (chat_sessions.update.update_session_command), like move_chat: the write
+    # and the conversation-wide memory re-bind are ONE implementation with the
+    # persona picker. `chat_id` omitted = the calling chat. `persona_id` is
+    # REQUIRED and nullable: null = Default, and the model has to say so.
+    """
+
+    chat_id: str | None = Field(default=None, min_length=1)
+    persona_id: str | None
     apply: ToolApply = ToolApply.confirm
 
 

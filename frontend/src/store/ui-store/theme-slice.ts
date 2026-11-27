@@ -60,7 +60,8 @@ export type CabinetSectionTab = 'profile' | 'mcp' | 'keys' | 'colors' | 'sound';
 
 export interface GlobalPrefs {
   theme: 'light' | 'dark';
-  panelWidths: { left: number | null; right: number | null };
+  // chatsLeft: the left panel in chat mode; left: docs mode, shared with the admin/cabinet asides.
+  panelWidths: { left: number | null; right: number | null; chatsLeft: number | null };
   language: Language;
   // ARCH: split-column width ratio (left column fraction, 0–1) is a global layout
   // preference like panelWidths — not per-document. Clamped to [0.2, 0.8].
@@ -89,7 +90,7 @@ export interface GlobalPrefs {
 
 const GLOBAL_DEFAULTS: GlobalPrefs = {
   theme: 'light',
-  panelWidths: { left: null, right: null },
+  panelWidths: { left: null, right: null, chatsLeft: null },
   language: 'en',
   splitRatio: SPLIT_RATIO_DEFAULT,
   showArchived: false,
@@ -134,7 +135,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     // theme-boot.js already applied while server prefs are still loading.
     theme: readCachedTheme(),
     language: 'en',
-    panelWidths: { left: null, right: null },
+    panelWidths: { left: null, right: null, chatsLeft: null },
     splitRatio: SPLIT_RATIO_DEFAULT,
     showArchived: false,
     adminSectionTab: null,
@@ -200,6 +201,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             panelWidths: {
               left: data.panelWidths?.left ?? GLOBAL_DEFAULTS.panelWidths.left,
               right: data.panelWidths?.right ?? GLOBAL_DEFAULTS.panelWidths.right,
+              chatsLeft: data.panelWidths?.chatsLeft ?? GLOBAL_DEFAULTS.panelWidths.chatsLeft,
             },
             language: data.language ?? GLOBAL_DEFAULTS.language,
             splitRatio: data.splitRatio ?? GLOBAL_DEFAULTS.splitRatio,

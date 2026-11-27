@@ -31,7 +31,9 @@ async def test_models_empty_url_branch_carries_empty_context_windows(
     client, admin_user, monkeypatch,
 ):
     """The empty-AI_API_URL branch still emits a (empty) `context_windows` map so
-    the response shape is identical across branches."""
+    the response shape is identical across branches — and the same branch
+    carries `context_nudge` resolved from the two settings (percents parsed to
+    ints), since the thresholds are computed client-side from the two together."""
     pin_chat_api(monkeypatch, url="")
     monkeypatch.setattr(driver.client, "agent_capability", _ok_capability)
     monkeypatch.setattr(comp, "_gateway_models_cache", None)  # test isolation
@@ -40,6 +42,7 @@ async def test_models_empty_url_branch_carries_empty_context_windows(
     resp = await client.get("/api/chat/models", cookies={"lore_session": token})
     assert resp.status_code == 200, resp.text
     assert resp.json()["context_windows"] == {}
+    assert resp.json()["context_nudge"] == {"floor_tokens": 150000, "percents": [20, 25, 30]}
 
 
 # ─── _persist_context_usage ──────────────────────────────────────────────────

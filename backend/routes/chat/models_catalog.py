@@ -3,7 +3,7 @@
 
 Part of the chat-completions system: the HTTP client singleton, the single-
 flight TTL cache over the gateway's /v1/models, the picker payload projection
-(models list, vision badge set, context_windows map) and the GET /models
+(models list, vision badge set, context_windows map, context_nudge settings) and the GET /models
 route. Turn machinery stays in completions.py.
 NOT a gate: the turn-time capability reads (vision, the compaction window,
 the output cap) ask the DRIVER (driver.client.agent_capability → the plugin's
@@ -33,6 +33,7 @@ from auth import get_current_user
 from config import (
     CHAT_MAX_IMAGE_SIZE_MB,
     CHAT_MODELS_TIMEOUT_S,
+    parse_nudge_percents,
 )
 from db import get_db
 from routes.chat._router import router
@@ -320,12 +321,29 @@ def _roster_fields(entries: list[dict]) -> dict:
     }
 
 
+async def _context_nudge_payload() -> dict:
+    """`context_nudge` for the body: the two instance settings resolved live
+    (settings.get — admin-override aware), the percents string parsed to ints.
+
+    Read BEFORE the gateway branch so the empty-AI_API_URL branch carries the
+    same key. The thresholds themselves are the
+    CLIENT's — computed per model window there; the backend derives nothing
+    (the live window exists only in the turn's stream, and the relay passes
+    the harness through untouched)."""
+    return {
+        "floor_tokens": await settings.get("CONTEXT_NUDGE_FLOOR_TOKENS"),
+        "percents": parse_nudge_percents(await settings.get("CONTEXT_NUDGE_PERCENTS")),
+    }
+
+
 def _models_payload(
     entries: list[dict],
     cap: dict,
+    *,
     reasoning: dict | None = None,
     default_model: str | None = None,
     model_image_max_pixels: int | None = None,
+    context_nudge: dict,
 ) -> dict:
     """Build the GET /models response body from the raw gateway entries.
 
@@ -339,6 +357,11 @@ def _models_payload(
     models the gateway reported a window for); the frontend gauge reads it as the
     cap source (the turn's cap is the driver's own resolution).
 
+    `context_nudge` ({floor_tokens, percents}) is the instance's new-chat
+    suggestion dial — ride beside `context_windows` because the client computes
+    the thresholds from the two together. A REQUIRED keyword: a caller that
+    forgets it must fail loudly, never ship a body that silently never nudges.
+
     `reasoning` is the gateway's per-model {supported, effort_levels} map —
     the effort dropdown's single source. {} when the gateway has no
     /capabilities (feature absence — see gateway_reasoning_map).
@@ -350,6 +373,7 @@ def _models_payload(
         "agent_available": cap["available"],
         "agent_unavailable_reason": cap.get("reason"),
         "context_windows": _context_windows_map(entries),
+        "context_nudge": context_nudge,
         "reasoning": dict(reasoning or {}),
     }
     if default_model is not None:
@@ -400,7 +424,8 @@ async def list_models(user: dict = Depends(get_current_user)):
     Both capability fields are merged into the success AND empty-AI_API_URL bodies.
     The 503-on-gateway-down path stays: when the whole gateway is down the flags are
     irrelevant. Also returns `context_windows` (per-model real context length)
-    from the same cached gateway fetch.
+    from the same cached gateway fetch, and `context_nudge` — the instance's
+    new-chat suggestion dial, read before the branch so both branches carry it.
 
     Freshness: the served model list, default_model, and context_windows come from a
     CHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a
@@ -418,9 +443,21 @@ async def list_models(user: dict = Depends(get_current_user)):
     # reference-image labels with it (what the model gets after the press), so
     # it must stay the same number the press uses.
     image_cap = await settings.get("MODEL_IMAGE_MAX_PIXELS")
+    # The nudge dial is read like image_cap: before the branch, so the
+    # empty-AI_API_URL body carries the same key.
+    nudge = await _context_nudge_payload()
     if not api_url:
         cap = await _capability_snapshot()
-        return _models_payload([], cap, model_image_max_pixels=image_cap)
+        return _models_payload(
+            [], cap, context_nudge=nudge, model_image_max_pixels=image_cap,
+        )
+    return await _gateway_models_body(user, image_cap, nudge)
+
+
+async def _gateway_models_body(user: dict, image_cap: int, nudge: dict) -> dict:
+    """The gateway branch of GET /models: the caller's roster, filtered and
+    ordered over the served entries; 503 on a gateway failure (the route's
+    contract — `list_models` keeps the empty-AI_API_URL branch beside it)."""
     # Read before the try: a DB failure here is not "AI service unavailable".
     visible, hidden, tools, positions = await _caller_tiers(user)
     try:
@@ -436,6 +473,7 @@ async def list_models(user: dict = Depends(get_current_user)):
             entries, cap, reasoning=reasoning,
             default_model=await settings.get("CHAT_MODEL"),
             model_image_max_pixels=image_cap,
+            context_nudge=nudge,
         )
         return _split_rosters(body, hidden, tools, positions)
     except Exception as e:

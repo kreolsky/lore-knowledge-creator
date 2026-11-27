@@ -19,6 +19,7 @@ from artifacts import html_node_sentence
 
 from agent_tools.registry import ToolEntry, register
 from agent_tools.specs.chat_recall import (
+    EXPORT_CHAT_TOOL,
     LIST_MY_CHATS_TOOL,
     READ_MY_CHAT_TOOL,
     SEARCH_MY_CHATS_TOOL,
@@ -45,7 +46,11 @@ from agent_tools.specs.memory import (
     SAVE_CHAT_FACTS_TOOL,
     SET_FACT_ANCHOR_TOOL,
 )
-from agent_tools.specs.mutate import MOVE_CHAT_TOOL, MUTATE_TOOLS
+from agent_tools.specs.mutate import (
+    MOVE_CHAT_TOOL,
+    MUTATE_TOOLS,
+    SET_CHAT_PERSONA_TOOL,
+)
 from agent_tools.specs.pipelines import (
     BIND_PIPELINE_TOOL,
     LIST_PIPELINES_TOOL,
@@ -83,6 +88,7 @@ from models import (
     ToolDiffDocumentVersions,
     ToolEditDocument,
     ToolEditTableCell,
+    ToolExportChat,
     ToolExportSubtreeMd,
     ToolFindDocuments,
     ToolGenerateImage,
@@ -121,6 +127,7 @@ from models import (
     ToolSaveSkill,
     ToolSearch,
     ToolSearchMyChats,
+    ToolSetChatPersona,
     ToolSetFactAnchor,
     ToolSetTaskStatus,
     ToolUnbindPipeline,
@@ -467,6 +474,19 @@ register(ToolEntry(
 register(ToolEntry(
     spec=MOVE_CHAT_TOOL, request_model=ToolMoveChat,
     handler_path="routes.tool_api.structure:tool_move_chat",
+    surfaces=_AGENT_HTTP,
+))
+# set_chat_persona: move_chat's twin over the persona field — same pack, same
+# in-app-only posture (a chat is one person's own row).
+register(ToolEntry(
+    spec=SET_CHAT_PERSONA_TOOL, request_model=ToolSetChatPersona,
+    handler_path="routes.tool_api.structure:tool_set_chat_persona",
+    surfaces=_AGENT_HTTP,
+))
+# export_chat: read_my_chat's target set, written whole into the sandbox.
+register(ToolEntry(
+    spec=EXPORT_CHAT_TOOL, request_model=ToolExportChat,
+    handler_path="routes.tool_api.chat_recall:tool_export_chat",
     surfaces=_AGENT_HTTP,
 ))
 # The fact-saving pair: agent-only, the memory skill's capture from THIS

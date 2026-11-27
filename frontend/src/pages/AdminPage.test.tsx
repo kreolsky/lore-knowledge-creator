@@ -337,7 +337,7 @@ describe('AdminPage — per-user persistence: last section + shared width (panel
   });
 
   it('aside seeds at the shared width (panelWidths.left); a drag PUTs the new width', async () => {
-    useUIStore.setState({ panelWidths: { left: 333, right: null } });
+    useUIStore.setState({ panelWidths: { left: 333, right: null, chatsLeft: null } });
     await render();
     // Same field the project sidebar reads — project → section has no jump.
     expect(aside()?.style.width).toBe('333px');
@@ -349,7 +349,7 @@ describe('AdminPage — per-user persistence: last section + shared width (panel
       document.dispatchEvent(new MouseEvent('pointermove', { clientX: 360, bubbles: true })); // +60 → 393
       document.dispatchEvent(new MouseEvent('pointerup', { clientX: 360, bubbles: true }));
     });
-    expect(lastGlobalPrefs().panelWidths).toEqual({ left: 393, right: null });
+    expect(lastGlobalPrefs().panelWidths).toEqual({ left: 393, right: null, chatsLeft: null });
   });
 
   it('no width ever chosen → the 220 default (same as the project sidebar default)', async () => {

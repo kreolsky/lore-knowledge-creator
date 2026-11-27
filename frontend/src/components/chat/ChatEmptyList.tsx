@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChatStore } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
-import { PillList } from '../ui';
+import { PillList, type ListPillActiveColor } from '../ui';
 import { ChatRow } from './ChatRow';
 import { useSortedSessions } from './useSortedSessions';
 import { useTranslation } from '../../i18n';
@@ -12,10 +12,12 @@ import { useDocumentPreview } from '../../hooks/useDocumentPreview';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useLastMessagePreview } from '../../hooks/useLastMessagePreview';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
-import { useRightPanelHoverPreview } from '../../hooks/useRightPanelHoverPreview';
+import { useHoverPreview } from '../../hooks/useHoverPreview';
+import { getLeftPanelPopupLeft, getRightPanelPopupLeft, RIGHT_PANEL_PREVIEW_SHIFT } from '../../utils/popup-position';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { useChatUnavailable } from './ChatUnavailableNotice';
 
-export function ChatEmptyList() {
+export function ChatEmptyList({ activeColor }: { activeColor?: ListPillActiveColor } = {}) {
   // Pure last-activity sort of ALL sessions.
   const sorted = useSortedSessions();
   const { t } = useTranslation();
@@ -91,7 +93,13 @@ export function ChatEmptyList() {
   // nor loading. The 'session' kind has no error/loading channel (useLastMessagePreview).
   const hoverError = hoverKind === 'doc' ? docError : hoverKind === 'ref' ? refError : false;
   const hoverLoading = hoverKind === 'doc' ? docLoading : hoverKind === 'ref' ? refLoading : false;
-  const hover = useRightPanelHoverPreview();
+  // WHY side by mode: in chat mode this list is the LEFT panel, so the preview opens to its
+  // right; elsewhere it is the right panel's list (see SYSTEM: hover-preview).
+  const chatMode = useUIStore(selectChatMode);
+  const hover = useHoverPreview({
+    shiftOffset: RIGHT_PANEL_PREVIEW_SHIFT,
+    getPopupLeft: chatMode ? getLeftPanelPopupLeft : getRightPanelPopupLeft,
+  });
 
   const handleBodyHover = useCallback((sessionId: string, el: HTMLElement) => {
     setHoverKind('session');
@@ -140,6 +148,7 @@ export function ChatEmptyList() {
             key={s.session_id}
             session={s}
             isActive={s.session_id === activeSessionId}
+            activeColor={activeColor}
             onSelect={handleSelect}
             onDelete={handleDelete}
             onRename={handleRename}

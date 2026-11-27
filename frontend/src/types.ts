@@ -539,6 +539,11 @@ export interface ChatSession {
   // effectiveCap(...) fallback from the first frame on; null before it (the
   // fallback then rules — see misc-slice.ts).
   context_window?: number | null;
+  // WHY: the context-length nudge level — how many of the configured
+  // thresholds the person already answered for this chat (null = 0). The
+  // client PATCHes k when a banner is answered; the thresholds come from
+  // GET /chat/models `context_nudge` × the live window, computed client-side.
+  context_nudge_level?: number | null;
   created_at: string;
   updated_at: string;
   // Emitted by serialize_record for every `*_at` field (pre-formatted for display).

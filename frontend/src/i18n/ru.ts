@@ -591,8 +591,13 @@ export const ru: Record<TranslationKey, string> = {
   // Token-usage gauge (context-window fill).
   chatContextTokensLabel: 'Использование контекста',
   chatContextTokensTip: 'Окно контекста: использовано {used} из {cap} токенов ({pct}%)',
-  chatCacheHitLabel: 'Доля кэша промпта',
-  chatCacheHitTip: 'Последний ход: {cached} токенов из кэша промпта, {fresh} новых ({pct}% из кэша). Падение — закэшированный префикс был токенизирован заново.',
+  // Context-length nudge — the strip above the
+  // composer; the carry-over sentence depends on the persona's memory.
+  chatContextNudgeTitle: 'Чат разросся — новый ответит лучше и дешевле.',
+  chatContextNudgeCarryMemory: 'Главное из него само перейдёт в следующие чаты.',
+  chatContextNudgeCarryNone: 'Новый чат начнётся с нуля — сначала скопируйте нужное.',
+  chatContextNudgeContinue: 'Продолжить',
+  chatContextNudgeFailed: 'Не удалось сохранить ответ — подсказка появится снова',
   chatStreamFrameIncomplete: 'Агент сообщил об ошибке, но без описания.',
   chatSendFailed: 'Ошибка запроса чата — ответ может быть неполным',
   stopGenerationFailed: 'Не удалось остановить генерацию — серверный ход мог остаться активным',
@@ -887,6 +892,13 @@ export const ru: Record<TranslationKey, string> = {
 
   // panel tabs
   tabChat: 'Чат',
+  tabChats: 'Чаты',
+  tabDocument: 'Документ',
+  chatModeNoDocument: 'Документ не открыт — здесь появится документ, который пишет агент',
+  chatDocPin: 'Закрепить — не следовать за агентом',
+  chatDocUnpin: 'Закреплено — нажмите, чтобы снова следовать за агентом',
+  chatDocPick: 'Открыть документ',
+  chatDocOpenFully: 'Открыть в режиме документов',
   tabReferences: 'Референсы',
   tabNotes: 'Заметки',
   tabLinks: 'Ссылки',

@@ -14,7 +14,7 @@ from chat_sessions.serialize import build_ref_map, serialize_session
 from fastapi import Depends, HTTPException, Query
 from surrealdb import AsyncSurreal
 
-from access import get_document_access
+from access import get_document_access, get_project_access
 from auth import get_current_user
 from db import extract_id, fetch_one, get_ancestor_ids, get_db
 from jobs.tasks.chat_topics import mark_persona_memory
@@ -63,11 +63,12 @@ async def _note_scope_ids(db, document_id: str, project_id: str) -> list[str]:
 
 
 async def _load_candidate_rows(
-    db, *, project_id: str, user: dict, document_id: str, is_note: bool | None,
+    db, *, project_id: str, user: dict, document_id: str | None, is_note: bool | None,
 ) -> list:
-    """The candidate THREAD rows for the list. Note-scoped (branch walk) or AI
-    project-wide per (project, user), candidate-capped before the last-activity
-    aggregate. No document_id scope filter for AI chats.
+    """The candidate THREAD rows for the list. Note-scoped (branch walk over
+    `document_id`, which that path requires) or AI project-wide per
+    (project, user), candidate-capped before the last-activity aggregate. No
+    document_id scope filter for AI chats.
 
     # ARCH: the AI list counts THREADS — the
     # candidates are ROOT rows only (thread_id = own id, or IS NONE for a
@@ -262,10 +263,33 @@ async def _mark_running(rows: list[dict], serialized: list[dict]) -> None:
         out["running"] = extract_id(row.get("compacted_from") or row.get("id")) in running
 
 
+async def _require_list_access(
+    document_id: str | None, project_id: str, is_note: bool | None, user: dict,
+) -> None:
+    """The list's access gate — 404 without access; 400 for a notes listing
+    with no document (notes are scoped by one, there is nothing to walk).
+
+    # INVARIANT(security): a document-less AI listing is gated on the PROJECT it
+    # is keyed by, never left ungated.  Why: the document gate was the list's
+    # only proof of membership; a project-level chat has no document to gate
+    # on, so the proof moves to the project whose rows the query selects.
+    """
+    if is_note is True and not document_id:
+        raise HTTPException(
+            status_code=400, detail="document_id is required to list notes",
+        )
+    access = (
+        await get_document_access(document_id, user)
+        if document_id else await get_project_access(project_id, user)
+    )
+    if access is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+
 @router.get("/sessions")
 async def list_sessions(
     project_id: str,
-    document_id: str,
+    document_id: str | None = None,
     is_note: bool | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
@@ -292,16 +316,17 @@ async def list_sessions(
         with a different ACL profile (visible to any commentator+ member); they
         stay scoped so a document sees its own + inherited notes only.
 
-    `document_id` stays required — it gates access (get_document_access) and is the
-    resolver's pick scope; it is not a visibility filter for AI chats.
+    `document_id` is optional and never a visibility filter for AI chats. Given,
+    it gates access (get_document_access) and is the resolver's pick scope;
+    absent, the gate is the project itself (get_project_access) and the AI
+    list is the same project-wide set. A notes listing requires it (400
+    without) — a note is scoped by its document.
 
     Ordering is by LAST-MESSAGE time (derived read-time), not chat_sessions.updated_at
     (see chat-sort-by-last-message). ORDER BY updated_at DESC here is only the
     candidate selection key + a deterministic Python-sort tiebreak.
     """
-    access = await get_document_access(document_id, user)
-    if access is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    await _require_list_access(document_id, project_id, is_note, user)
 
     rows = await _load_candidate_rows(
         db, project_id=project_id, user=user,

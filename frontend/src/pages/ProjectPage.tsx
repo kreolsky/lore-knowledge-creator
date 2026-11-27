@@ -26,10 +26,13 @@ import { FindReplacePanel } from '../components/editor/FindReplacePanel';
 import { LinkSuggestionsPopup } from '../components/editor/LinkSuggestionsPopup';
 import { EditorLinkPreview } from '../components/editor/EditorLinkPreview';
 import { ImagePreviewHost } from '../components/editor/ImagePreviewHost';
-import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTabEntry } from '../components/ProjectShell';
+import { ProjectShell, type ProjectShellHandle, type RightTabEntry, type LeftTabEntry, type ShellTab } from '../components/ProjectShell';
+import { ChatModeList } from '../components/chat/ChatModeList';
+import { ChatModeDocHeader } from '../components/chat/ChatModeDocHeader';
+import { useChatDocFollow } from '../hooks/useChatDocFollow';
 import { useAppStore } from '../store/app-store';
 import { selectOpenPageLocked, PAGE_BOUND_TABS } from '../utils/page-lock';
-import { useUIStore, useDocState, ORPHAN_KEY, type RightTab } from '../store/ui-store';
+import { useUIStore, useDocState, selectChatMode, ORPHAN_KEY, type RightTab } from '../store/ui-store';
 import { isRememberedTab, readRefOpenMode, refIsScope } from '../store/ui-store/documents-slice';
 import { searchModeOnOpen } from '../store/ui-store/search-slice';
 import { useNoteStore } from '../store/note-store';
@@ -40,7 +43,7 @@ import { useAccessTabState } from '../hooks/useAccessTabState';
 import { useInboxSummary } from '../store/inbox-store';
 import { ProjectCollabContext } from '../collab/ProjectCollabContext';
 import { useTranslation, t as tImperative } from '../i18n';
-import { FileText, List, StickyNote, Paperclip, Archive, MessagesSquare, Search, ArrowDownLeft, Settings, Replace, ShieldCheck } from 'lucide-react';
+import { FileText, List, StickyNote, Paperclip, Archive, MessagesSquare, MessageSquareText, Search, ArrowDownLeft, Settings, Replace, ShieldCheck } from 'lucide-react';
 import { isRightPanelReady } from '../utils/right-panel-ready';
 import { useAudioRecorder } from '../hooks/useAudioRecorder';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -100,6 +103,7 @@ export function ProjectPage() {
   const currentReference = useAppStore(s => s.currentReference);
 
   const shellRef = useRef<ProjectShellHandle>(null);
+  const chatModeRef = useRef(false);
 
   const setRightPanelTab = useUIStore(s => s.setRightPanelTab);
   const setFindSeed = useUIStore(s => s.setFindSeed);
@@ -292,6 +296,8 @@ export function ProjectPage() {
     // ARCH: seed the search field with the editor selection before the tab switch
     // mounts FindReplacePanel (which reads this once on mount). The live open-find
     // subscription inside FindReplacePanel handles the repeat-Cmd+F case.
+    // WHY: chat mode's right panel has no find tab — Cmd+F there would open a hidden overlay.
+    if (chatModeRef.current) return;
     setFindSeed(selection);
     shellRef.current?.openRightPanel('find');
   }, [setFindSeed]));
@@ -330,11 +336,11 @@ export function ProjectPage() {
   // the panel was closed). The click's tab write re-renders after this handler,
   // and SearchPanel (sharing the right panel with chat) mounts after that,
   // reading the mode set here.
-  const handleRightTabClick = useCallback((tab: RightTab, fromTab: RightTab | null) => {
+  const handleRightTabClick = useCallback((tab: ShellTab, fromTab: ShellTab | null) => {
     if (tab !== 'checkpoint') setSnapshotPreview(null);
     if (tab === 'search') {
       const ui = useUIStore.getState();
-      const next = searchModeOnOpen(fromTab, ui.searchMode, ui.searchDocMode);
+      const next = searchModeOnOpen(fromTab === 'doc' ? null : fromTab, ui.searchMode, ui.searchDocMode);
       if (next) ui.setSearchMode(next);
     }
   }, [setSnapshotPreview]);
@@ -348,6 +354,17 @@ export function ProjectPage() {
     { tab: 'docs', icon: <FileText size={15} />, title: t('tabDocuments'), renderPanel: () => <Sidebar /> },
     { tab: 'toc', icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> },
   ];
+  // Chat mode (the chats left tab): offered on a desktop layout to whoever has the chat tab.
+  // Ruling: a phone keeps docs mode only (see selectChatMode).
+  const compactLayout = useUIStore(s => s.compactLayout);
+  const offersChatMode = !compactLayout && canAi && accessLevel !== 'readonly';
+  if (offersChatMode) {
+    leftTabs.push({ tab: 'chats', icon: <MessageSquareText size={15} />, title: t('tabChats'), renderPanel: () => <ChatModeList /> });
+  }
+  const chatMode = useUIStore(selectChatMode) && offersChatMode;
+  const chatModeRightTab = useUIStore(s => s.chatModeRightTab);
+  chatModeRef.current = chatMode;
+  useChatDocFollow(chatMode);
 
   const rightTabs: RightTabEntry[] = [];
   if (accessLevel !== 'readonly') {
@@ -416,8 +433,36 @@ export function ProjectPage() {
     ? (overlayTab && rightTabs.some(entry => entry.tab === overlayTab) ? overlayTab : storedTab)
     : null;
 
+  // Chat mode's right panel: the document (kept mounted — DocumentPage commits the URL
+  // document whatever tab is shown), search, settings. Notes, materials, history and links
+  // are not in chat mode (operator ruling).
+  const renderDocumentBody = () => hasDocument ? (
+    // WHY above the Outlet: one docked bar spans both split columns and serves
+    // whichever editor has focus, like the floating overlays below.
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      {dockedToolbarOn && <DockedFormatToolbar />}
+      <Outlet />
+    </div>
+  ) : (
+    <div className="h-full flex items-center justify-center px-6 text-center text-text-dim bg-bg">
+      {chatMode ? t('chatModeNoDocument') : t('selectOrCreateDocument')}
+    </div>
+  );
+  const renderDocument = () => chatMode ? (
+    <div className="chat-mode-doc flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      <ChatModeDocHeader />
+      {renderDocumentBody()}
+    </div>
+  ) : renderDocumentBody();
+  const chatModeTabs: RightTabEntry[] = rightTabs
+    .filter(entry => entry.tab === 'search' || entry.tab === 'settings');
+  chatModeTabs.unshift({ tab: 'doc', icon: <FileText size={15} />, title: t('tabDocument'), renderPanel: renderDocument, keepMounted: true });
+  const chatModeTab: ShellTab = chatModeTabs.some(entry => entry.tab === chatModeRightTab) ? chatModeRightTab : 'doc';
+
   const handlePanelDragEnter = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return;
+    // WHY: chat mode's right panel has no Refs/chat tab to reveal for a drop.
+    if (chatMode) return;
     // WHY: a locked page has no Refs tab to reveal (page-bound tabs filter above).
     if (pageLocked) return;
     if (effectiveTab === 'chat') {
@@ -433,30 +478,19 @@ export function ProjectPage() {
     }
     if (effectiveTab !== 'refs') shellRef.current?.openRightPanel('refs');
     else shellRef.current?.openRightPanel();
-  }, [effectiveTab, activeNoteThreadId, pageLocked]);
+  }, [chatMode, effectiveTab, activeNoteThreadId, pageLocked]);
 
   return (
     <ProjectCollabContext.Provider value={projectCollabConn}>
       <ProjectShell
         ref={shellRef}
         leftTabs={leftTabs}
-        rightTabs={rightTabs}
-        renderCenter={() => hasDocument ? (
-          // WHY above the Outlet: one docked bar spans both split columns and serves
-          // whichever editor has focus, like the floating overlays below.
-          <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
-            {dockedToolbarOn && <DockedFormatToolbar />}
-            <Outlet />
-          </div>
-        ) : (
-          <div className="h-full flex items-center justify-center text-text-dim bg-bg">
-            {t('selectOrCreateDocument')}
-          </div>
-        )}
+        rightTabs={chatMode ? chatModeTabs : rightTabs}
+        renderCenter={chatMode ? () => <ChatPanel /> : renderDocument}
         userControlsVariant="full"
         rightPanelDocId={currentDocId}
-        rightPanelReady={rightPanelReady}
-        effectiveRightTab={effectiveTab}
+        rightPanelReady={chatMode || rightPanelReady}
+        effectiveRightTab={chatMode ? chatModeTab : effectiveTab}
         onPanelDragEnter={handlePanelDragEnter}
         onRightTabClick={handleRightTabClick}
         overlays={

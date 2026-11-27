@@ -2726,6 +2726,19 @@
             ],
             "title": "Agent Auto"
           },
+          "context_nudge_level": {
+            "anyOf": [
+              {
+                "maximum": 3.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Nudge Level"
+          },
           "document_id": {
             "anyOf": [
               {
@@ -3576,6 +3589,25 @@
           "document_id"
         ],
         "title": "ToolEditTableCell",
+        "type": "object"
+      },
+      "ToolExportChat": {
+        "description": "`export_chat` body — one visible chat, whole, as a JSON file in the\ncaller's sandbox workspace. `chat_id` omitted ⇒ the caller's CURRENT\nsession; the target set is read_my_chat's own.",
+        "properties": {
+          "chat_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          }
+        },
+        "title": "ToolExportChat",
         "type": "object"
       },
       "ToolExportSubtreeMd": {
@@ -4842,6 +4874,43 @@
           }
         },
         "title": "ToolSearchMyChats",
+        "type": "object"
+      },
+      "ToolSetChatPersona": {
+        "description": "set_chat_persona body — the persona a chat of the caller runs under.",
+        "properties": {
+          "apply": {
+            "$ref": "#/components/schemas/ToolApply",
+            "default": "confirm"
+          },
+          "chat_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chat Id"
+          },
+          "persona_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persona Id"
+          }
+        },
+        "required": [
+          "persona_id"
+        ],
+        "title": "ToolSetChatPersona",
         "type": "object"
       },
       "ToolSetFactAnchor": {
@@ -9538,7 +9607,7 @@
     },
     "/api/chat/models": {
       "get": {
-        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound. The set of served models changes on\nthe order of weeks, so the staleness is accepted over a per-open gateway RTT.\nThe `reasoning` map rides its own cache with the same TTL and lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.",
+        "description": "Proxy GET /v1/models from the AI API. Returns model ID list + capability flags.\n\nReports Agent-line availability and the vision-capable model set\nso the frontend picker can badge vision models instead of erroring at send time.\nBoth capability fields are merged into the success AND empty-AI_API_URL bodies.\nThe 503-on-gateway-down path stays: when the whole gateway is down the flags are\nirrelevant. Also returns `context_windows` (per-model real context length)\nfrom the same cached gateway fetch, and `context_nudge` — the instance's\nnew-chat suggestion dial, read before the branch so both branches carry it.\n\nFreshness: the served model list, default_model, and context_windows come from a\nCHAT_MODELS_CACHE_TTL_S (60s) TTL cache — a freshly-added gateway model (or a\nremoved one) can lag by up to that bound. The set of served models changes on\nthe order of weeks, so the staleness is accepted over a per-open gateway RTT.\nThe `reasoning` map rides its own cache with the same TTL and lag.\n\nThe roster is FILTERED to the caller's available models (SYSTEM:\nmodel-access) — the picker only; the turn gate is require_model_access.\nHidden models leave `models` for every caller, admins included; their\ncapability fields stay, so a pinned session keeps working. `tool_models`: _split_rosters.",
         "operationId": "list_models_api_chat_models_get",
         "parameters": [
           {
@@ -9586,7 +9655,7 @@
     },
     "/api/chat/sessions": {
       "get": {
-        "description": "List chat sessions for current user in a project.\n\nVisibility:\n  - AI chats (is_note None/False): PROJECT-WIDE per (project, user), listed\n    as THREADS — the candidates are root rows (a pre-migration row with no\n    thread_id is its own thread), each item carrying its active_branch_id\n    session's fields (the last-opened branch); limit/offset count THREADS.\n    Every AI thread the user owns in the project is visible from ANY\n    document — the open document/reference only affects ghost-attach + the\n    resolver's active-chat pick, never this list. Privacy holds\n    automatically: AI chats carry user_id = $uid + owner-only access. The\n    candidate set is capped at MAX_LISTED_SESSIONS newest-by-updated_at\n    BEFORE the branch swap, so branches never eat the cap.\n  - Note-chats (is_note True): KEEP the branch scope (ancestor/sibling/\n    reference-children). Notes are shared document-anchored comment threads\n    with a different ACL profile (visible to any commentator+ member); they\n    stay scoped so a document sees its own + inherited notes only.\n\n`document_id` stays required — it gates access (get_document_access) and is the\nresolver's pick scope; it is not a visibility filter for AI chats.\n\nOrdering is by LAST-MESSAGE time (derived read-time), not chat_sessions.updated_at\n(see chat-sort-by-last-message). ORDER BY updated_at DESC here is only the\ncandidate selection key + a deterministic Python-sort tiebreak.",
+        "description": "List chat sessions for current user in a project.\n\nVisibility:\n  - AI chats (is_note None/False): PROJECT-WIDE per (project, user), listed\n    as THREADS — the candidates are root rows (a pre-migration row with no\n    thread_id is its own thread), each item carrying its active_branch_id\n    session's fields (the last-opened branch); limit/offset count THREADS.\n    Every AI thread the user owns in the project is visible from ANY\n    document — the open document/reference only affects ghost-attach + the\n    resolver's active-chat pick, never this list. Privacy holds\n    automatically: AI chats carry user_id = $uid + owner-only access. The\n    candidate set is capped at MAX_LISTED_SESSIONS newest-by-updated_at\n    BEFORE the branch swap, so branches never eat the cap.\n  - Note-chats (is_note True): KEEP the branch scope (ancestor/sibling/\n    reference-children). Notes are shared document-anchored comment threads\n    with a different ACL profile (visible to any commentator+ member); they\n    stay scoped so a document sees its own + inherited notes only.\n\n`document_id` is optional and never a visibility filter for AI chats. Given,\nit gates access (get_document_access) and is the resolver's pick scope;\nabsent, the gate is the project itself (get_project_access) and the AI\nlist is the same project-wide set. A notes listing requires it (400\nwithout) — a note is scoped by its document.\n\nOrdering is by LAST-MESSAGE time (derived read-time), not chat_sessions.updated_at\n(see chat-sort-by-last-message). ORDER BY updated_at DESC here is only the\ncandidate selection key + a deterministic Python-sort tiebreak.",
         "operationId": "list_sessions_api_chat_sessions_get",
         "parameters": [
           {
@@ -9601,10 +9670,17 @@
           {
             "in": "query",
             "name": "document_id",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Document Id",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
             }
           },
           {
@@ -9715,7 +9791,7 @@
         ]
       },
       "post": {
-        "description": "Create a new chat session scoped to a document or reference.\n\nNote-chats (body.is_note=true) need at least commentator access: they are\nthe comment channel, and readonly users cannot start one.\n\n# see SYSTEM: capability-tiers — AI session create is 'ai'-gated, note-chats\n# are 'base': the gate runs BEFORE the project-access checks so the tier\n# 403 is the first answer. The note path is exempt — notes never call\n# the LLM.",
+        "description": "Create a new chat session: on a document or reference, or at project level.\n\nAn AI chat may carry neither document_id nor reference_id — a project-level\nchat (agent-first mode starts one with no document open); its access gate\nis the project itself. A note is document-owned (the model refuses it\nwithout one).\n\nNote-chats (body.is_note=true) need at least commentator access: they are\nthe comment channel, and readonly users cannot start one.\n\n# see SYSTEM: capability-tiers — AI session create is 'ai'-gated, note-chats\n# are 'base': the gate runs BEFORE the project-access checks so the tier\n# 403 is the first answer. The note path is exempt — notes never call\n# the LLM.",
         "operationId": "create_session_api_chat_sessions_post",
         "parameters": [
           {
@@ -18089,6 +18165,136 @@
         ]
       }
     },
+    "/api/tool/export_chat": {
+      "post": {
+        "description": "Write one of the caller's chats, whole, as JSON into the caller's\nsandbox workspace. The target set is read_my_chat's (`_read_target`): the\nvisible-set wall holds, omission = the calling chat. The path is\nbackend-derived, never agent-supplied; the console-key gate rides on\nwrite_workspace_file, full project access on the console's own rule.",
+        "operationId": "tool_export_chat_api_tool_export_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolExportChat"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Export Chat",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
     "/api/tool/export_subtree_md": {
       "post": {
         "description": "Export a document's whole subtree as a zip of Markdown files\n(GitHub/Obsidian-compatible layout) and return a short-lived download URL\n— never bytes.",
@@ -23049,6 +23255,137 @@
           }
         },
         "summary": "Tool Search My Chats",
+        "tags": [
+          "tool-api"
+        ]
+      }
+    },
+    "/api/tool/set_chat_persona": {
+      "post": {
+        "description": "Switch the persona of one of the caller's own chats (null = Default) —\nthe PATCH path's own command, so the write and the conversation-wide memory\nre-bind are ONE implementation with the persona picker.\n\n`chat_id` omitted = the calling chat. Every refusal lands BEFORE the\nmid-turn hold.",
+        "operationId": "tool_set_chat_persona_api_tool_set_chat_persona_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": true,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Call-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Call-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Session-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Session-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Message-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Message-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Agent-Verdict",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Agent-Verdict"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Driver-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Driver-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolSetChatPersona"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tool Set Chat Persona",
         "tags": [
           "tool-api"
         ]

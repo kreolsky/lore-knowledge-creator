@@ -70,7 +70,7 @@ export default tseslint.config(
       'src/components/Sidebar.tsx',       // inline rename input + doc-item action buttons
       'src/components/DocumentTree.tsx',  // doc-item action buttons + inline rename (extracted from Sidebar)
       'src/components/references/RefCard.tsx', // gear zone action buttons (same pattern as DocumentTree)
-      'src/components/ParentPickerPopup.tsx', // link-suggest-item buttons (same pattern as LinkSuggestionsPopup)
+      'src/components/DocumentPickerPopup.tsx', // link-suggest-item buttons (same pattern as LinkSuggestionsPopup)
       'src/components/ReferencesPanel.tsx', // file input type="file" (hidden)
       'src/components/admin/SkillsSection.tsx', // file input type="file" (hidden, zip import)
       'src/components/ApiKeyManager.tsx',  // copy button + API key input

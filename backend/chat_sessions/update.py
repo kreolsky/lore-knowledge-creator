@@ -85,6 +85,19 @@ def _ai_only_sets(session: dict, body: SessionUpdate, sets: list[str], params: d
         else:
             sets.append("active_branch_id = $active_branch_id")
             params["active_branch_id"] = body.active_branch_id
+    # WHY: the context-length nudge level — the counter the client advances
+    # when the person answers a banner. A plain
+    # per-row field: the server never derives it (the live window is known
+    # only to the turn's stream). model_fields_set semantics like
+    # reasoning_effort — explicit null clears to NONE (= 0 answered); a
+    # non-null value is bounded 0..3 by the model, so a jump across two
+    # thresholds is one PATCH of k that uses up both.
+    if "context_nudge_level" in body.model_fields_set:
+        if body.context_nudge_level is None:
+            sets.append("context_nudge_level = NONE")
+        else:
+            sets.append("context_nudge_level = $context_nudge_level")
+            params["context_nudge_level"] = body.context_nudge_level
 
 
 async def _agent_flag_sets(

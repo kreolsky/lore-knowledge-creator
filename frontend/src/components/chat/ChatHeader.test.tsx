@@ -51,6 +51,7 @@ const uiState: Record<string, unknown> = {
 };
 vi.mock('../../store/ui-store', () => ({
   useUIStore: Object.assign((sel: (s: unknown) => unknown) => sel(uiState), { getState: () => uiState }),
+  selectChatMode: () => false,
 }));
 const emitted: string[] = [];
 vi.mock('../../events', () => ({ emit: (...a: unknown[]) => emitted.push(String(a[0])) }));

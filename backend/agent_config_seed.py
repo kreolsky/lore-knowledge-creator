@@ -12,7 +12,7 @@ the public surface so every existing import site keeps working.
 """
 from __future__ import annotations
 
-from documents.service import create_document
+from documents.service import create_document, generate_path_for_title
 from surrealdb.errors import AlreadyExistsError
 
 from db import get_db
@@ -70,8 +70,8 @@ SYSTEM_DOC_ROLES: tuple[str, ...] = (
 _MEMORY_ROLES: tuple[str, ...] = ("memory_folder",)
 
 # The roles that MUST exist after lazy init (the default skeleton). NEW projects
-# seed no SELECTED persona and ship ZERO personas out of the box — the Personas
-# folder is empty (a persona a USER creates is a plain doc under it). The Rules
+# seed no SELECTED persona; the Personas folder ships ONE unselected persona
+# (seed_memory_persona — a plain doc under it, like a persona a USER creates). The Rules
 # folder is seeded WITH default content; the skills folder is seeded
 # empty — the shipped skills (backend/configs/skill_*.md) overlay it at turn time,
 # never copied (see agent_skills). No leaf children
@@ -286,3 +286,46 @@ async def _ensure_memory_folder(
         _deterministic_id(project_id, "memory_folder"), project_id, "memory_folder",
         parent_id=root_id, title=_role_title("memory_folder"), content="",
     )
+
+
+MEMORY_PERSONA_TITLE = "Memory Brain"
+
+# WHY: frontmatter only — an empty body injects nothing (build_agent_system_prompt
+# renders `# Persona` only for a non-empty body), so picking this persona adds chat
+# memory and auto-recall to Default and changes nothing else.
+# WHY no propagation path: the seed is a one-time starter the user owns — its two
+# numbers are visible and editable in the doc, so a change here reaches only
+# projects seeded after it; untouched, edited and deleted copies are all left alone.
+_MEMORY_PERSONA_CONTENT = "---\nchat_memory_budget: 8000\nchat_recall_budget: 4000\n---\n"
+
+
+async def seed_memory_persona(project_id: str, personas_folder_id: str) -> bool:
+    """Create the unselected "Memory Brain" persona under an EMPTY Personas folder.
+
+    Returns True when this call created it. A folder with any live child is left
+    alone — the project already has personas, or the user arranged it themselves.
+    The persona is a plain user doc (positional identity), so the user may delete
+    it; the callers never re-run on the same folder, so a deletion sticks.
+    """
+    db = await get_db()
+    children = await db.query(
+        "SELECT VALUE meta::id(id) FROM documents "
+        "WHERE parent_id = $id AND deleted_at IS NONE LIMIT 1",
+        {"id": personas_folder_id},
+    )
+    if children:
+        return False
+    try:
+        await create_document(_deterministic_id(project_id, "persona-memory"), {
+            "project_id": project_id, "parent_id": personas_folder_id,
+            "title": MEMORY_PERSONA_TITLE, "content": _MEMORY_PERSONA_CONTENT,
+            "path": await generate_path_for_title(project_id, MEMORY_PERSONA_TITLE),
+            "is_index": False,
+        }, user_name="System")
+    except RuntimeError as exc:
+        # WHY: two first turns of a fresh project both see the empty folder; the
+        # deterministic id makes the loser's create the winner's row.
+        if not isinstance(exc.__cause__, AlreadyExistsError):
+            raise
+        return False
+    return True

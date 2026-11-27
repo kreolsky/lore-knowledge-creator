@@ -1,11 +1,12 @@
 ---
 name: structure
-description: Use when the user wants to move or reorder documents in the tree, turn a document into a reference or back, see what links to or from a document, re-run the import of a reference whose text is wrong or empty, or move a chat under another document. «перенеси», «перемести в папку», «поменяй порядок», «сделай референсом», «что ссылается на этот документ», «битые ссылки», «переобработай референс», «перераспознай запись», «перенеси этот чат под документ»; move this document, move this chat, what links here, reprocess this reference.
+description: Use when the user wants to switch the persona a chat runs under (a persona is a document in the Personas folder — switching it is this skill's tool, never role-play), move or reorder documents in the tree, turn a document into a reference or back, see what links to or from a document, re-run the import of a reference whose text is wrong or empty, or move a chat under another document. «переключи чат на персону», «смени персону», «поставь персону», «перенеси», «перемести в папку», «поменяй порядок», «сделай референсом», «что ссылается на этот документ», «битые ссылки», «переобработай референс», «перераспознай запись», «перенеси этот чат под документ»; switch this chat's persona, move this document, move this chat, what links here, reprocess this reference.
 tools:
   - move_document
   - get_links
   - reprocess_reference
   - move_chat
+  - set_chat_persona
 ---
 
 # Project structure
@@ -36,6 +37,15 @@ it, document writes are checked against the new parent. To move another of the u
 pass its `chat_id` from `list_my_chats` (the chat-recall skill — when that skill is off, only
 the current chat can be moved). Like a document move, it is not undone from the History panel
 — undo it by moving back.
+
+## A chat's persona
+
+`set_chat_persona` switches the persona a chat runs under — the same choice as the persona
+picker, and with it the chat memory the chat belongs to. `persona_id` is a direct child of
+the Personas folder (its id from `get_project_structure`), or `null` for Default. Omit
+`chat_id` for the chat you are in — the new persona answers from the next turn, so make it
+the LAST step of your turn; another of the user's chats takes its `chat_id` from
+`list_my_chats`. Only the user's own chats; a note has no persona.
 
 ## Links
 

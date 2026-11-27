@@ -52,6 +52,12 @@
   color: var(--text);
 }
 
+/* The document tree's selected row (.doc-item.active) — chat mode's selected chat. */
+.plain.activeTree {
+  background: var(--surface3);
+  color: var(--text);
+}
+
 /* ── Anchored steady — yellow. Borderless fill in every state. ── */
 .anchored {
   background: var(--warm-tint);
@@ -115,6 +121,9 @@
   }
   .plain.activeBlue:hover {
     background: var(--ref-strong);
+  }
+  .plain.activeTree:hover {
+    background: var(--surface3);
   }
   /* Keep the inbox mark while hovering — the plain/anchorless hover fills
    * (surface2) are same-specificity and later, so without this the flag

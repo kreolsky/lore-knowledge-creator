@@ -1,4 +1,4 @@
-"""Tool-API structural mutating tools — move_document, rename_document, restore_document_version, move_chat.
+"""Tool-API structural mutating tools — move_document, rename_document, restore_document_version, move_chat, set_chat_persona.
 
 # ARCH: move is a STRUCTURAL executor, not a content
 # mutation. It reparents a tree document and/or reorders it within a sibling group
@@ -28,6 +28,8 @@
 # lazily inside the handlers.
 """
 from agent.context import get_agent_context, owned_session_row
+from agent_config import selected_persona_doc
+from agent_config_load import load_agent_system_docs
 from chat_sessions.update import (
     check_reparent_target,
     refuse_note_reparent,
@@ -45,6 +47,7 @@ from models import (
     ToolMoveDocument,
     ToolRenameDocument,
     ToolRestoreDocumentVersion,
+    ToolSetChatPersona,
 )
 from routes.tool_api._common import (
     _is_system_target,
@@ -181,6 +184,47 @@ async def tool_move_chat(
         "document_id": out.get("document_id"),
         "reference_id": out["reference_id"],
         "host_document_id": out.get("host_document_id"),
+    }
+
+
+@track_agent_tool("set_chat_persona")
+async def tool_set_chat_persona(
+    body: ToolSetChatPersona, ctx: dict = Depends(get_agent_context),
+):
+    """Switch the persona of one of the caller's own chats (null = Default) —
+    the PATCH path's own command, so the write and the conversation-wide memory
+    re-bind are ONE implementation with the persona picker.
+
+    `chat_id` omitted = the calling chat. Every refusal lands BEFORE the
+    mid-turn hold.
+    """
+    _require_in_app_agent(ctx)
+    chat_id = body.chat_id or ctx.get("session_id")
+    session = await owned_session_row(ctx, chat_id) if chat_id else None
+    if session is None:
+        # Uniform 404 for a missing, a deleted and another person's chat.
+        raise HTTPException(status_code=404, detail="Chat not found")
+    if session.get("is_note") is True:
+        raise HTTPException(status_code=400, detail="A note has no persona")
+    # WHY: the PATCH stores system_prompt_id unchecked — the picker offers only
+    # real personas; the agent can type any id, so it is resolved here.
+    if body.persona_id is not None and selected_persona_doc(
+        await load_agent_system_docs(ctx["project_id"]), body.persona_id,
+    ) is None:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    decision = await _resolve_apply_or_force(
+        ctx, ui_preference=body.apply.value, is_system=False,
+    )
+    if decision.mode != "auto":
+        _refuse_unconfirmable("set_chat_persona", decision.reason)
+    out = await update_session_command(
+        await get_db(), chat_id, session,
+        SessionUpdate(system_prompt_id=body.persona_id), ctx["user"],
+    )
+    return {
+        "status": "applied",
+        "session_id": out["session_id"],
+        "persona_id": body.persona_id,
     }
 
 

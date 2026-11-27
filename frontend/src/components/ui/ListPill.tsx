@@ -16,12 +16,13 @@ import type React from 'react';
 import styles from './ListPill.module.css';
 
 export type ListPillVariant = 'plain' | 'anchored' | 'highlight' | 'anchorless' | 'backlink';
-export type ListPillActiveColor = 'accent' | 'blue';
+export type ListPillActiveColor = 'accent' | 'blue' | 'tree';
 
 interface ListPillProps {
   variant?: ListPillVariant;
   active?: boolean;
-  /** Active fill color when variant is 'plain': chat purple 'accent' or reference 'blue'. */
+  /** Active fill color when variant is 'plain': chat purple 'accent', reference 'blue', or
+   *  'tree' — the document tree's selected-row fill (chat mode's chat list). */
   activeColor?: ListPillActiveColor;
   /** see SYSTEM: inbox — this object arrived from OUTSIDE flagged for the viewer.
    * Paints the warm inbox mark OVER the variant fill (the anchored
@@ -42,6 +43,12 @@ interface ListPillProps {
   [key: `data-${string}`]: string | undefined;
 }
 
+const ACTIVE_CLS: Record<ListPillActiveColor, string> = {
+  accent: styles.activeAccent,
+  blue: styles.activeBlue,
+  tree: styles.activeTree,
+};
+
 // WHY memo: right-panel lists re-render on any list mutation; pill props are stable by row identity.
 export const ListPill = memo(function ListPill({
   variant = 'plain',
@@ -61,7 +68,7 @@ export const ListPill = memo(function ListPill({
 }: ListPillProps) {
   const activeCls = active
     ? variant === 'plain'
-      ? activeColor === 'blue' ? styles.activeBlue : styles.activeAccent
+      ? ACTIVE_CLS[activeColor]
       : ''
     : '';
   const cls = [

@@ -25,15 +25,18 @@ interface RowActionsProps {
   active?: boolean;
   /** Backdrop tint when active: default surface3 gradient, 'blue' for the open reference. */
   activeBackdrop?: 'blue';
+  /** 'tree': the plate matches a row selected with ListPill activeColor="tree" (surface3). */
+  backdrop?: 'tree';
 }
 
-export function RowActions({ primary, menu, active = false, activeBackdrop }: RowActionsProps) {
+export function RowActions({ primary, menu, active = false, activeBackdrop, backdrop }: RowActionsProps) {
   const gear = useGearMenu();
 
   // `active` keeps the cluster revealed; `activeBackdrop='blue'` additionally tints
   // the plate blue (the functional open-reference indicator).
   const activeCls = active ? styles.active : '';
-  const backdropCls = active && activeBackdrop === 'blue' ? styles.activeBlue : '';
+  const backdropCls = active && activeBackdrop === 'blue' ? styles.activeBlue
+    : backdrop === 'tree' ? styles.backdropTree : '';
 
   return (
     <div

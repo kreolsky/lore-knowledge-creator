@@ -30,8 +30,13 @@ import type { DocumentUIState, EphemeralTab, MainEntity, RefOpenMode, Remembered
 export { DEFAULT_DOC_STATE, ORPHAN_KEY, readRefOpenMode, showsBothPanes };
 export type { RightTab, RememberedTab, EphemeralTab, MainEntity, DocumentUIState, RefOpenMode, TabOverlay };
 
+/** The left tab: the doc tree, the table of contents, or chat mode (the chat list). */
+export type SidebarTab = 'docs' | 'toc' | 'chats';
+/** Chat mode's right-panel tabs — MODE state, independent of the per-document RightTab. */
+export type ChatModeTab = 'doc' | 'search' | 'settings';
+
 interface PersistedUIState {
-  sidebarTab: 'docs' | 'toc';
+  sidebarTab: SidebarTab;
   sidebarOpen: boolean;
   lastDocId?: string;
   lastDocPosition?: EditorPosition;
@@ -49,6 +54,9 @@ interface PersistedUIState {
   searchDocMode?: SearchDocMode;
   // The user's own agent-sound toggle for this project (never shared with members).
   soundEnabled?: boolean;
+  chatModeRightTab?: ChatModeTab;
+  chatModeRightOpen?: boolean;
+  chatDocPinned?: boolean;
 }
 
 // WHY: phones in both orientations and portrait tablets; landscape tablets keep desktop.
@@ -66,6 +74,9 @@ export const UI_DEFAULTS: PersistedUIState = {
   documents: {},
   lastActiveChatSessionId: null,
   soundEnabled: false,
+  chatModeRightTab: 'doc',
+  chatModeRightOpen: true,
+  chatDocPinned: false,
 };
 
 const lastSavedBlobs = new Map<string, PersistedUIState>();
@@ -128,6 +139,9 @@ function buildUIBlob(uiState: UIState, appCtx: AppContext): PersistedUIState | n
     searchMode: uiState.searchMode,
     searchDocMode: uiState.searchDocMode,
     soundEnabled: uiState.soundEnabled,
+    chatModeRightTab: uiState.chatModeRightTab,
+    chatModeRightOpen: uiState.chatModeRightOpen,
+    chatDocPinned: uiState.chatDocPinned,
   };
 }
 
@@ -229,10 +243,10 @@ export function clearLastSavedBlobs() {
 registerEditorHostReset('user', clearLastSavedBlobs);
 
 export interface UIState {
-  sidebarTab: 'docs' | 'toc';
+  sidebarTab: SidebarTab;
   sidebarOpen: boolean;
   collapsedDocIds: string[];
-  panelWidths: { left: number | null; right: number | null };
+  panelWidths: { left: number | null; right: number | null; chatsLeft: number | null };
   splitRatio: number;
   theme: 'light' | 'dark';
   language: Language;
@@ -276,6 +290,12 @@ export interface UIState {
   lastMoveTargetProjectId: string | null;
   // Agent notification sound on/off for this project (project prefs blob, default off).
   soundEnabled: boolean;
+  // WHY mode state, not per-document: in chat mode the right panel's document follows the
+  // chat, so a per-document tab or sort would flip under the user on every navigation.
+  chatModeRightTab: ChatModeTab;
+  chatModeRightOpen: boolean;
+  // Chat mode's right document stops following the agent's writes (a manual move pins it).
+  chatDocPinned: boolean;
   // The chosen notification sound (global-persisted; see theme-slice GlobalPrefs).
   soundPreset: SoundChoice;
   // WHY: Transient one-shot seed for FindReplacePanel. Set on every Cmd+F
@@ -283,7 +303,10 @@ export interface UIState {
   // fresh-open timing gap (the panel subscribes to open-find too late). NOT persisted.
   findSeedText: string;
 
-  setSidebarTab: (tab: 'docs' | 'toc') => void;
+  setSidebarTab: (tab: SidebarTab) => void;
+  setChatModeRightTab: (tab: ChatModeTab) => void;
+  setChatModeRightOpen: (open: boolean) => void;
+  setChatDocPinned: (value: boolean) => void;
   setSidebarOpen: (open: boolean) => void;
   // Per-document right-panel actions
   setRightPanelTab: (docId: string | null, tab: RightTab | null) => void;
@@ -327,7 +350,7 @@ export interface UIState {
   setSearchMode: (mode: SearchMode) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setLanguage: (language: Language) => void;
-  setPanelWidth: (side: 'left' | 'right', width: number) => void;
+  setPanelWidth: (side: 'left' | 'right' | 'chatsLeft', width: number) => void;
   loadGlobalPrefs: () => Promise<void>;
   saveUIStateNow: () => void;
   saveGlobalPrefsNow: () => void;
@@ -371,6 +394,9 @@ export const useUIStore = create<UIState>((set, get) => ({
   lastActiveChatSessionId: null,
   lastMoveTargetProjectId: null,
   soundEnabled: false,
+  chatModeRightTab: 'doc',
+  chatModeRightOpen: true,
+  chatDocPinned: false,
   findSeedText: '',
   compactLayout: compactMql?.matches ?? false,
   ...createPublicShareSlice(set),
@@ -398,6 +424,18 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   setSoundEnabled: (enabled) => {
     set({ soundEnabled: enabled });
+    triggerSaveUI(get());
+  },
+  setChatModeRightTab: (tab) => {
+    set({ chatModeRightTab: tab });
+    triggerSaveUI(get());
+  },
+  setChatModeRightOpen: (open) => {
+    set({ chatModeRightOpen: open });
+    triggerSaveUI(get());
+  },
+  setChatDocPinned: (value) => {
+    set({ chatDocPinned: value });
     triggerSaveUI(get());
   },
 
@@ -433,6 +471,9 @@ export const useUIStore = create<UIState>((set, get) => ({
       searchMode: (merged.searchMode as SearchMode) ?? 'fulltext',
       searchDocMode: (merged.searchDocMode as SearchDocMode) ?? 'fulltext',
       soundEnabled: merged.soundEnabled ?? false,
+      chatModeRightTab: merged.chatModeRightTab ?? 'doc',
+      chatModeRightOpen: merged.chatModeRightOpen ?? true,
+      chatDocPinned: merged.chatDocPinned ?? false,
       documentPositions: serverDocPositions,
     });
   },
@@ -492,6 +533,9 @@ export const useUIStore = create<UIState>((set, get) => ({
       lastActiveChatSessionId: null,
       lastMoveTargetProjectId: null,
       soundEnabled: false,
+      chatModeRightTab: 'doc' as const,
+      chatModeRightOpen: true,
+      chatDocPinned: false,
       searchQuery: '',
       searchResults: [],
       searchMode: 'fulltext' as const,
@@ -513,3 +557,9 @@ compactMql?.addEventListener('change', e => useUIStore.setState({ compactLayout:
 export function useDocState(docId: string | null | undefined): DocumentUIState {
   return useUIStore(s => s.documents[docId ?? ORPHAN_KEY] ?? DEFAULT_DOC_STATE);
 }
+
+/** Chat mode is on: the chats left tab, on a desktop layout of the authed project page.
+ * WHY compact is excluded: a phone keeps docs mode only — three panes do not fit, and the
+ * chats tab is not offered there (ProjectPage), so a persisted 'chats' reads as docs. */
+export const selectChatMode = (s: UIState): boolean =>
+  s.sidebarTab === 'chats' && !s.compactLayout && !s.isPublicShare;

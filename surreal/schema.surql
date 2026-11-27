@@ -1146,6 +1146,13 @@ DEFINE FIELD OVERWRITE title_user_set ON chat_sessions TYPE option<bool> DEFAULT
 -- pre-existing rows back-fill to NONE; the serializer emits null and the client
 -- resolves the live cap from /models (context_windows).
 DEFINE FIELD IF NOT EXISTS context_tokens_used ON chat_sessions TYPE option<int>;
+-- WHY: how many of the context-nudge thresholds
+-- the person already answered for this chat (NONE = 0) — a plain per-row
+-- counter the client PATCHes when a banner is answered; never derived here,
+-- since the live window exists only in the turn's stream. option<int> like
+-- context_tokens_used: pre-existing rows read NONE and the serializer emits
+-- null, which the client reads as 0.
+DEFINE FIELD IF NOT EXISTS context_nudge_level ON chat_sessions TYPE option<int>;
 -- The continuation chat_sessions row minted after compaction:
 -- `compacted_from` records the source chat_session id (idempotency +
 -- traceability).

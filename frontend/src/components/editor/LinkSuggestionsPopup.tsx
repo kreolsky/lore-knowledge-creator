@@ -8,7 +8,6 @@
 
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { EditorView } from '@codemirror/view';
 import { useAppStore } from '../../store/app-store';
 import { useEvent } from '../../hooks/useEvent';
 import { useNavMode } from '../../hooks/useNavMode';
@@ -17,7 +16,6 @@ import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useReferencePreview } from '../../hooks/useReferencePreview';
 import { usePopupSlot } from '../../hooks/usePopupSlot';
 import { useClickOutside } from '../../hooks/useClickOutside';
-import { useEditorView } from '../../editor/active-editor';
 import { apiClient } from '../../api/client';
 import { Reference } from '../../types';
 import { FieldInput } from '../ui';
@@ -28,13 +26,12 @@ import { useTranslation } from '../../i18n';
 import { sortDocumentsForChat, sortReferences } from '../../utils/document-sort';
 import { buildParentMap } from '../../utils/document-hierarchy';
 import { referenceFileUrl } from '../../utils/reference-url';
-import type { EventMap, LinkRevert } from '../../events/event-types';
+import type { EventMap, LinkRevert, LinkTarget } from '../../events/event-types';
 
 const POPUP_WIDTH = 340;
 
 export function LinkSuggestionsPopup() {
   const { t } = useTranslation();
-  const getEditorView = useEditorView();
   const documents = useAppStore(s => s.documents);
   const currentDocument = useAppStore(s => s.currentDocument);
   const currentProject = useAppStore(s => s.currentProject);
@@ -63,7 +60,7 @@ export function LinkSuggestionsPopup() {
   if (rawContent !== undefined) lastContentRef.current = rawContent;
   const previewContent = lastContentRef.current;
 
-  const targetViewRef = useRef<EditorView | null>(null);
+  const targetRef = useRef<LinkTarget | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   const previewPanelRef = useRef<HTMLDivElement>(null);
   const previewPanelRootCallback = useCallback((el: HTMLDivElement | null) => {
@@ -146,7 +143,7 @@ export function LinkSuggestionsPopup() {
     if (isOpen) return;
     setPreviewDocId(null);
     setPreviewRefId(null);
-    const view = targetViewRef.current;
+    const view = targetRef.current;
     const revert = revertRef.current;
     revertRef.current = null;
     if (insertedRef.current || !view || !revert) return;
@@ -154,11 +151,8 @@ export function LinkSuggestionsPopup() {
     // undo is the document-wide Y.UndoManager, whose capture window can merge the scaffold
     // with the typing just before it. Applied only while the scaffold is still intact.
     const { from, inserted, original } = revert;
-    if (view.state.sliceDoc(from, from + inserted.length) === inserted) {
-      view.dispatch({
-        changes: { from, to: from + inserted.length, insert: original },
-        selection: { anchor: from, head: from + original.length },
-      });
+    if (view.sliceDoc(from, from + inserted.length) === inserted) {
+      view.apply([{ from, to: from + inserted.length, insert: original }], { anchor: from, head: from + original.length });
     }
     view.focus();
   }, [isOpen]);
@@ -173,7 +167,7 @@ export function LinkSuggestionsPopup() {
     setSelectedIndex(0);
     setIsOpen(true);
     insertedRef.current = false;
-    targetViewRef.current = detail.editorView ?? null;
+    targetRef.current = detail.target;
     revertRef.current = detail.revert;
   }, [documents]));
 
@@ -211,17 +205,14 @@ export function LinkSuggestionsPopup() {
 
   const handleInsertLink = (targetId: string, title: string) => {
     insertedRef.current = true;
-    const targetView = targetViewRef.current ?? getEditorView();
-    if (insertPos !== null && targetView) {
+    const target = targetRef.current;
+    if (insertPos !== null && target) {
       // WHY: link patterns read the anchor as `[^\]]+`, so brackets in a title would end it early.
       const label = labelPos === null ? '' : title.replace(/[[\]]/g, '');
       const changes = [{ from: insertPos, to: insertPos, insert: targetId }];
       if (labelPos !== null) changes.push({ from: labelPos, to: labelPos, insert: label });
-      targetView.dispatch({
-        changes,
-        selection: { anchor: insertPos + label.length + targetId.length + 1 },
-      });
-      targetView.focus();
+      target.apply(changes, { anchor: insertPos + label.length + targetId.length + 1 });
+      target.focus();
     }
     setIsOpen(false);
   };

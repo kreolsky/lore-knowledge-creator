@@ -184,6 +184,14 @@ export interface ChatState {
   // (mirrors models/agentAvailable). Only models the gateway reported a window for
   // are present; others fall back.
   contextWindows: Record<string, number>;
+  // GET /chat/models `context_nudge` ({floor_tokens, percents}) — the instance's
+  // new-chat suggestion dial. The thresholds are
+  // computed CLIENT-side against the live window (utils/context-nudge.ts): the
+  // window exists only in the turn's stream and the backend derives nothing.
+  // null until /models resolves or when the body omits it → no banner.
+  // Instance config, not session state → NOT cleared by reset() (mirrors
+  // contextWindows).
+  contextNudge: { floor_tokens: number; percents: number[] } | null;
   // ARCH: per-model reasoning capability map
   // (GET /chat/models `reasoning`, the backend's projection of the gateway's
   // /v1/capabilities). The effort dropdown's single source — {} when the
@@ -329,6 +337,11 @@ export interface ChatState {
   // messages, commit them directly and skip the loadMessages round-trip.
   setActiveSession: (sessionId: string | null, preloadedMessages?: ChatMessage[]) => void;
   updateSession: (sessionId: string, data: { title?: string; model?: string; system_prompt_id?: string | null; agent_auto?: boolean; reasoning_effort?: string | null; document_id?: string | null }) => Promise<void>;
+  // WHY: answer the context-length banner for the ACTIVE chat:
+  // PATCH context_nudge_level = k (the thresholds
+  // crossed at the moment of the answer). Optimistic, rolled back with an error
+  // toast on a failed PATCH. No-op in a ghost (no row).
+  answerContextNudge: (level: number) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
 
   // Actions — messages

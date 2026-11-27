@@ -51,6 +51,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // Per-model real context window (gateway context_length); populated by loadModels.
   // {} until /models resolves (effectiveCap falls back).
   contextWindows: {},
+  // The instance's context-length nudge dial (GET /chat/models `context_nudge`);
+  // null until /models resolves → no banner.
+  contextNudge: null,
   // Per-model reasoning capability (plan reasoning-effort-selector); {} until
   // /models resolves → no effort dropdown.
   reasoning: {},

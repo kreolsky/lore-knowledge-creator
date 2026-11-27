@@ -10,13 +10,15 @@ import { readRefOpenMode, refIsScope } from '../../store/ui-store/documents-slic
 import { emit } from '../../events';
 import { useTranslation } from '../../i18n';
 import { formatDate } from '../../utils/format';
-import { InlineRenameInput, IconButton, ListPill, RowActions } from '../ui';
+import { InlineRenameInput, IconButton, ListPill, RowActions, type ListPillActiveColor } from '../ui';
 import { useArmedAction } from '../../hooks/useArmedAction';
 import { ListRow } from './ListRow';
 
 interface ChatRowProps {
   session: ChatSession;
   isActive?: boolean;
+  /** Selected-row fill; chat mode's list uses the tree's. */
+  activeColor?: ListPillActiveColor;
   onSelect: (id: string) => void;
   // Optional armed-delete action (ChatEmptyList passes it; standalone usage omits).
   onDelete?: (id: string) => void;
@@ -37,7 +39,7 @@ interface ChatRowProps {
   onBodyHoverLeave?: (e?: React.MouseEvent) => void;
 }
 
-export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDelete, onRename, onParentHover, onParentHoverLeave, onBodyHover, onBodyHoverLeave }: ChatRowProps) {
+export const ChatRow = memo(function ChatRow({ session, isActive, activeColor = 'accent', onSelect, onDelete, onRename, onParentHover, onParentHoverLeave, onBodyHover, onBodyHoverLeave }: ChatRowProps) {
   const { t } = useTranslation();
   const references = useAppStore(s => s.references);
   const documents = useAppStore(s => s.documents);
@@ -163,7 +165,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
   return (
     <ListPill
       active={isActive}
-      activeColor="accent"
+      activeColor={activeColor}
       onClick={() => onSelect(session.session_id)}
       onMouseEnter={onBodyHover ? (e) => onBodyHover(session.session_id, e.currentTarget as HTMLElement) : undefined}
       onMouseLeave={onBodyHoverLeave}
@@ -232,6 +234,7 @@ export const ChatRow = memo(function ChatRow({ session, isActive, onSelect, onDe
         }
         actions={onDelete || onRename ? (
           <RowActions
+            backdrop={isActive && activeColor === 'tree' ? 'tree' : undefined}
             primary={(<>
               {onRename && (
                 <IconButton size="sm" title={t('rename')} onClick={startRename}>

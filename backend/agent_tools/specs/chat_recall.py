@@ -242,3 +242,34 @@ VIEW_CHAT_IMAGE_TOOL: dict = {
         },
     },
 }
+
+# WHY: in the chat-recall pack beside read_my_chat — the same target set, served
+# whole into a file instead of in pages into the context window.
+EXPORT_CHAT_TOOL: dict = {
+    "type": "function",
+    "mutating": False,
+    "function": {
+        "name": "export_chat",
+        "description": (
+            "Save one of the user's own chats of this project, whole, as a JSON file "
+            "in the sandbox workspace — to process it there with code (sandbox_bash). "
+            "Their own chat only, never another person's, never notes. Omit "
+            "`chat_id` to export THIS conversation; otherwise take it from "
+            "`list_my_chats` or a `search_my_chats` hit. Returns `path` (the file, "
+            "overwritten on a repeat export), `total_turns` and `bytes`. The file "
+            "is `{chat_id, chat_title, document_id, exported_at, turns}`, each turn "
+            "a list of `{message_id, role, created_at, content}` in order, nothing "
+            "truncated; a message with attached images carries `images: N` (the "
+            "images themselves are not in the file — see one with `view_chat_image`)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": "The chat to export; omit to export THIS chat.",
+                },
+            },
+        },
+    },
+}

@@ -1416,7 +1416,7 @@ describe('loadGlobalPrefs', () => {
     const s = useUIStore.getState();
     expect(s.theme).toBe('dark');
     expect(s.language).toBe('ru');
-    expect(s.panelWidths).toEqual({ left: 300, right: 400 });
+    expect(s.panelWidths).toEqual({ left: 300, right: 400, chatsLeft: null });
     expect(s.globalPrefsLoaded).toBe(true);
   });
 

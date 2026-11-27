@@ -3,7 +3,8 @@
 The search half and its live-row predicate live in chat_sessions.recall_search,
 shared with the person's own chat-search route; this handler adds the key auth,
 the off-switch, the calling conversation's exclusion and anchor, the window read,
-and the skill pack's list (whole-chat find), read (whole-chat paging) and
+and the skill pack's list (whole-chat find), read (whole-chat paging),
+export_chat (the whole chat as a JSON file in the sandbox) and
 view_chat_image (one attached image) tools over the SAME predicate.
 
 # ARCH (dsh comparison, recorded per the rented-brain rule): dsh already ships
@@ -25,6 +26,7 @@ import base64
 import binascii
 import json
 import re
+from datetime import UTC, datetime
 from typing import NamedTuple
 
 import settings
@@ -43,8 +45,10 @@ from chat_sessions.recall_search import (
 )
 from fastapi import Body, Depends, HTTPException
 
+from access import require_full_project_access
 from db import get_db
 from models import (
+    ToolExportChat,
     ToolListMyChats,
     ToolReadMyChat,
     ToolSearchMyChats,
@@ -52,6 +56,7 @@ from models import (
 )
 from routes.tool_api._common import _require_in_app_agent
 from routes.tool_api._image_view import VIEW_CHAT_IMAGE_MAX_BYTES, image_envelope
+from routes.tool_api.sandbox.files import write_workspace_file
 from routes.tool_api_telemetry import track_agent_tool
 from scope import subtree_doc_ids
 
@@ -79,6 +84,9 @@ async def tool_search_my_chats(
         sessions = await visible_sessions(db, user_id, project_id, exclude,
                                           viewer_doc_id=anchor)
         return await _read_window(db, sessions, body.message_id, body.offset)
+    # INVARIANT: the search spans every persona of the caller's chats — no origin_persona_id filter.
+    # Why: the information is the user's, not the persona's; a persona reaching the user's chat with
+    # another persona on request is a convenience (operator). Only the preloaded blocks are per persona.
     return await search_chats(
         db, user_id, project_id, body.query, exclude=exclude, scope=body.scope,
         anchor_doc_id=anchor, under_document_id=body.under_document_id,
@@ -438,6 +446,35 @@ async def tool_read_my_chat(
     if next_turn is not None:
         result["next_turn"] = next_turn
     return result
+
+
+@track_agent_tool("export_chat")
+async def tool_export_chat(
+    body: ToolExportChat = Body(...),
+    ctx: dict = Depends(get_agent_context),
+):
+    """Write one of the caller's chats, whole, as JSON into the caller's
+    sandbox workspace. The target set is read_my_chat's (`_read_target`): the
+    visible-set wall holds, omission = the calling chat. The path is
+    backend-derived, never agent-supplied; the console-key gate rides on
+    write_workspace_file, full project access on the console's own rule."""
+    _require_in_app_agent(ctx)
+    db = await get_db()
+    if await instance_skill_disabled(db, CHAT_RECALL_SKILL):
+        raise HTTPException(status_code=403,
+                            detail="chat-recall is disabled by the administrator")
+    await require_full_project_access(ctx["project_id"], ctx["user"], "use the sandbox")
+    chat_id, chat = await _read_target(db, ctx, body.chat_id)
+    turns = _turns(await _session_chain(db, chat_id))
+    payload = {
+        "chat_id": chat_id, "chat_title": chat["title"],
+        "document_id": chat.get("document_id"),
+        "exported_at": datetime.now(UTC).isoformat(),
+        "turns": [[_message_row(m, m["content"]) for m in turn] for turn in turns],
+    }
+    data = json.dumps(payload, ensure_ascii=False, indent=1).encode()
+    path = await write_workspace_file(ctx, f"exports/chat-{chat_id}.json", data)
+    return {"path": path, "total_turns": len(turns), "bytes": len(data)}
 
 
 async def _read_target(db, ctx: dict, requested: str | None) -> tuple[str, dict]:

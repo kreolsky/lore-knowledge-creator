@@ -113,6 +113,7 @@ from agent_config_seed import (
     _require_bare_project_id,
     _role_title,
     _upsert_system_doc,
+    seed_memory_persona,
 )
 from agent_skills import (
     build_skill_docs,
@@ -173,10 +174,12 @@ async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
     # preserved by the unify-agent-system MIGRATION (reparented as folder children),
     # not by this lazy init.
     #
-    # The project ships ZERO personas out of the box — the Personas folder is
-    # EMPTY, and consolidation guidance is delivered by the memory
-    # skill on demand. This sharpens the invariant above: Default injects nothing,
-    # full stop.
+    # The project ships ONE persona out of the box, unselected: "Memory Brain"
+    # (seed_memory_persona) — frontmatter-only, chat memory on, so trying memory is
+    # one deliberate pick while the feature is in debugging. It is seeded only in
+    # the call that CREATES the Personas folder (an existing folder is never
+    # re-seeded, so a user's deletion sticks); consolidation guidance is delivered
+    # by the memory skill on demand. Default still injects nothing, full stop.
     #
     # The bare-project_id contract is enforced by _require_bare_project_id (see its
     # INVARIANT) — this is the only entry point, so that is where it is refused.
@@ -191,8 +194,11 @@ async def ensure_agent_system_docs(project_id: str) -> dict[str, str]:
         )
         existing["system_root"] = root_id
 
+    personas_folder_existed = "system_prompt" in existing
     await _ensure_required_role_docs(project_id, root_id, existing)
     await _ensure_memory_folder(project_id, root_id, existing)
+    if not personas_folder_existed:
+        await seed_memory_persona(project_id, existing["system_prompt"])
     return existing
 
 

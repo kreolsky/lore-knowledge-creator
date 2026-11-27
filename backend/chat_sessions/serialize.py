@@ -101,6 +101,14 @@ def _stamp_wire_fields(out: dict) -> None:
     # (null when absent / pre-migration). The client resolves the LIVE cap from
     # /models (context_windows); `used` is the only persisted context figure.
     out["context_tokens_used"] = out.get("context_tokens_used")
+    # WHY: the context-length nudge level — how many
+    # of the configured thresholds the person already answered; null = 0.
+    # Stamped like context_tokens_used so the wire shape is stable: a row that
+    # never stored the field emits the key too, and the client compares it
+    # with the thresholds its live `used` has crossed. Server-persisted (not
+    # localStorage) so a reload or a second device does not repeat an answered
+    # banner.
+    out["context_nudge_level"] = out.get("context_nudge_level")
     # ARCH: stable wire shape — null when the
     # row predates the column or the value was cleared (Default), exactly like
     # context_tokens_used. The composer's dropdown reads null as Default.
@@ -130,6 +138,10 @@ def _stamp_reference_identity(
 ) -> None:
     """Label the session's parent entity (document or reference)."""
     did_raw = out.get("document_id")
+    # ARCH: stable wire shape — document_id is emitted even when the row never
+    # stored one (a project-level chat: a CREATE's RETURN omits NONE fields, a
+    # SELECT does not), so the client reads `null`, never a missing key.
+    out["document_id"] = did_raw
     ref_entry = ref_map.get(did_raw) if did_raw else None
     if ref_entry and is_ref_row(ref_entry):
         # WHY: a reference-scoped chat's parent IS the reference (ref: prefix),

@@ -456,3 +456,44 @@ MOVE_CHAT_TOOL: dict = {
         },
     },
 }
+
+
+# ARCH: set_chat_persona is agent-only like move_chat (see the ARCH above it) and
+# packed by the same `structure` skill — a chat's persona is its binding, not a
+# document write.
+SET_CHAT_PERSONA_TOOL: dict = {
+    "type": "function",
+    "mutating": True,
+    "function": {
+        "name": "set_chat_persona",
+        "description": (
+            "Switch the persona a chat of the user runs under — the same choice as "
+            "the persona picker, including the chat memory it belongs to. "
+            "`persona_id` is a persona document of this project (the direct "
+            "children of the Personas folder in `get_project_structure`), or null "
+            "for Default. Omit `chat_id` for THIS chat: the new persona takes effect "
+            "from the next turn, so make it the LAST step of your turn. To change "
+            "another of the user's chats, pass its `chat_id` from `list_my_chats`. "
+            "Only the user's own chats; notes are refused. In confirmation mode the "
+            "call is held for the user's approval; it applies on approval, or "
+            "returns `rejected` with the user's feedback if declined."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "string",
+                    "description": (
+                        "The chat to change, its id from `list_my_chats`; omit "
+                        "for THIS chat."
+                    ),
+                },
+                "persona_id": {
+                    "type": ["string", "null"],
+                    "description": "Persona document id, or null for Default.",
+                },
+            },
+            "required": ["persona_id"],
+        },
+    },
+}

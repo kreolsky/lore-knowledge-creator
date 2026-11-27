@@ -30,6 +30,7 @@ import { createGhostActions } from './ghost-actions';
 import { createLoadActions } from './load-actions';
 import { createCreateActions } from './create-actions';
 import { createUnindexedActions } from './unindexed-actions';
+import { createNudgeActions } from './nudge-actions';
 
 export { clearSessionsCache } from './load-actions';
 
@@ -40,6 +41,7 @@ type SessionsSlice = Pick<
   | 'createSession'
   | 'setActiveSession'
   | 'updateSession'
+  | 'answerContextNudge'
   | 'deleteSession'
   | 'startGhostChat'
   | 'setGhostSystemPrompt'
@@ -53,6 +55,7 @@ export function createSessionsSlice(set: Set, get: Get): SessionsSlice {
     ...createLoadActions(set, get),
     ...createCreateActions(set, get),
     ...createUnindexedActions(set, get),
+    ...createNudgeActions(set, get),
 
     // ARCH: Composite "Chat with Reference" action. Owns the sequence end-to-end:
     //   1. Open the ref (hydrateReference) — commits it as currentReference, the

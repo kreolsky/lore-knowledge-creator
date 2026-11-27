@@ -52,6 +52,7 @@ from migrations.migrate_origin_persona_follow_persona import (
 from migrations.migrate_origin_persona_forget_to_default import (
     _migrate_origin_persona_forget_to_default,
 )
+from migrations.migrate_seed_memory_persona import _migrate_seed_memory_persona
 from migrations.migrate_strict_tables import _migrate_strict_tables
 
 # Module-level on purpose: schema_fingerprint is dependency-light (re/typing only,
@@ -113,6 +114,10 @@ _MIGRATIONS: list[tuple[str, MigrationFn]] = [
     # schema.surql says. Runs after chat_has_region_drop / chat_context_drop (their
     # REMOVE FIELD leaves the row data this one UNSETs); no other dependency.
     ("strict_tables", _migrate_strict_tables),
+    # Projects whose Personas folder exists and is empty get the unselected
+    # "Memory Brain" persona (new projects get it at folder creation). Writes
+    # documents, so it runs after strict_tables; no other dependency.
+    ("seed_memory_persona", _migrate_seed_memory_persona),
 ]
 
 

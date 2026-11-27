@@ -82,6 +82,10 @@ export function createMiscSlice(set: Set, get: Get): MiscSlice {
           // Per-model real context window (gateway context_length). The gauge's
           // primary cap source; {} on miss → fallback.
           contextWindows: data.context_windows ?? {},
+          // The context-length nudge dial — the
+          // banner's thresholds are computed client-side from it. Absent on an
+          // older backend → null → no banner.
+          contextNudge: data.context_nudge ?? null,
           // Per-model reasoning capability —
           // the effort dropdown's single source. {} on miss (gateway without
           // /capabilities) → no dropdown, no banner.

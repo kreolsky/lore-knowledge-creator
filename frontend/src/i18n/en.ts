@@ -590,8 +590,13 @@ export const en = {
   // Token-usage gauge (context-window fill).
   chatContextTokensLabel: 'Context usage',
   chatContextTokensTip: 'Context window: {used} of {cap} tokens used ({pct}%)',
-  chatCacheHitLabel: 'Prompt cache hit rate',
-  chatCacheHitTip: 'Last turn: {cached} tokens served from the prompt cache, {fresh} new ({pct}% cached). A drop means the cached prefix was re-tokenized.',
+  // Context-length nudge — the strip above the
+  // composer; the carry-over sentence depends on the persona's memory.
+  chatContextNudgeTitle: 'This chat is long — a new one answers better and costs less.',
+  chatContextNudgeCarryMemory: 'Its key points carry over to your next chats on their own.',
+  chatContextNudgeCarryNone: 'A new chat starts from scratch — copy what you need first.',
+  chatContextNudgeContinue: 'Continue',
+  chatContextNudgeFailed: 'Could not save your answer — the suggestion will show again',
   chatStreamFrameIncomplete: 'The agent reported a failure but sent no description.',
   chatSendFailed: 'Chat request failed — the response may be incomplete',
   stopGenerationFailed: 'Failed to stop generation — a server-side turn may still be running',
@@ -888,6 +893,13 @@ export const en = {
 
   // panel tabs
   tabChat: 'Chat',
+  tabChats: 'Chats',
+  tabDocument: 'Document',
+  chatModeNoDocument: 'No document open — the document the agent writes will show here',
+  chatDocPin: 'Pin — stop following the agent',
+  chatDocUnpin: 'Pinned — click to follow the agent again',
+  chatDocPick: 'Open a document',
+  chatDocOpenFully: 'Open in documents mode',
   tabReferences: 'References',
   tabNotes: 'Notes',
   tabLinks: 'Links',

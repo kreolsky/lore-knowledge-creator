@@ -26,10 +26,10 @@ from comfy_markers import validate_size, validate_workflow
 from settings_registry import (
     ConfigError as ConfigError,  # re-export: `from config import ConfigError` callers stay valid
 )
+from settings_registry import SettingValueError, _section, setting
 from settings_registry import (
     _require_env as _require_env,  # re-export (test seam: tests/backend/test_unit_db.py)
 )
-from settings_registry import _section, setting
 
 # ─── Release version ─────────────────────────────────────────────────────────
 
@@ -771,8 +771,9 @@ RETRIEVAL_MIN_SCORE = setting(
 # RETRIEVAL_MIN_SCORE, which _score_chunks already applies, so the effective floor
 # is never below it — the value belongs to the embedding model like every row here.
 # WHY 0.32, not a cut between the sets: against embeddings/giga/480m, 25 hand-written
-# first messages over a 17-chat labelled corpus (scripts/chat-auto-recall-calib.py),
-# the sets OVERLAP. True matches scored 0.332–0.626 (median 0.41); non-matches
+# first messages over a 17-chat labelled corpus (now evals/persona_memory, retrieval
+# layer under `python -m evals.persona_memory`), the sets OVERLAP. True matches scored
+# 0.332–0.626 (median 0.41); non-matches
 # 0.182–0.444, nine of ten at or under 0.271; small talk that passed the word gate
 # 0.296 and 0.216. The one non-match above the true ones is a speech-act twin ("did we
 # order X and when is it delivered", X another object, 0.444): no floor that keeps
@@ -1023,6 +1024,59 @@ CHAT_LIST_TOPICS_LIMIT = setting(
     help="Max chats per page when topics are attached; long tables of "
          "contents can make a page shorter — the rest comes with the next "
          "page. Applies from the next call.",
+)
+
+# ─── Context-length nudge ────────────────────────────────────────────────────
+# ARCH: the backend carries two numbers and derives no threshold. The client
+# computes them per model window (t_i = p_i/100·W, kept only when t_i >= floor)
+# and shows the new-chat banner at each — the live window exists only in the turn's
+# context_usage stream; the backend persists `used` alone and the relay derives
+# nothing. The banner reacts to the percentages alone; the floor only drops a
+# percentage stop that lands under it, so a small window is not nudged at a
+# uselessly small size — it never lifts a stop up to the floor.
+# WHY a str key, not a list: the registry's row form is one JSON scalar per key
+# and its admin input is a text field — `parse_nudge_percents` is the single
+# rule for the shape, run on every PUT and at boot, and the same function is
+# the parser the /chat/models body reads.
+
+
+def parse_nudge_percents(value: str) -> list[int]:
+    """CONTEXT_NUDGE_PERCENTS → its integers; SettingValueError on any other shape.
+
+    Doubles as the setting's `validate` (coerce discards the return) and as the
+    parser the /chat/models body reads — one source for the rule: 1 to 3
+    strictly ascending integers in 1..95, comma-separated."""
+    try:
+        nums = [int(part) for part in str(value).split(",")]
+    except ValueError:
+        raise SettingValueError(
+            f"CONTEXT_NUDGE_PERCENTS: {value!r} is not comma-separated integers (e.g. 20,25,30)",
+        ) from None
+    if not 1 <= len(nums) <= 3:
+        raise SettingValueError(f"CONTEXT_NUDGE_PERCENTS: 1 to 3 values, got {len(nums)}")
+    if any(not 1 <= n <= 95 for n in nums):
+        raise SettingValueError(f"CONTEXT_NUDGE_PERCENTS: each value in 1..95, got {value!r}")
+    if any(a >= b for a, b in zip(nums, nums[1:])):
+        raise SettingValueError(f"CONTEXT_NUDGE_PERCENTS: strictly ascending, got {value!r}")
+    return nums
+
+
+CONTEXT_NUDGE_FLOOR_TOKENS = setting(
+    "CONTEXT_NUDGE_FLOOR_TOKENS", int, default=150000, min=0,
+    label="Context nudge floor, tokens",
+    help="Percentage stops that land below this many tokens are dropped, "
+         "not moved: the suggestion fires only at the percentages. With floor "
+         "150000 and 20,25,30: a 1M window nudges at 200k/250k/300k, a 512k "
+         "one once at ~157k (30%), a window under 500k never. Applies from "
+         "the next chat-panel open.",
+)
+CONTEXT_NUDGE_PERCENTS = setting(
+    "CONTEXT_NUDGE_PERCENTS", str, default="20,25,30", validate=parse_nudge_percents,
+    label="Context nudge thresholds, % of window",
+    help="Comma-separated, 1 to 3 strictly ascending integers in 1..95: the "
+         "share of the model's context window at which the new-chat suggestion "
+         "appears — at most one banner per value per chat, and after the last "
+         "it never comes back. Applies from the next chat-panel open.",
 )
 
 

@@ -591,6 +591,47 @@ async def test_edit_document_partial_splices_stay_pipe_text(
     assert capture_tables_json(doc) == "{}"
 
 
+# TEST-WHY: cross-process-contract — a table authored after a closing fence lands as an object in the real store, not pipe text.
+@pytest.mark.parametrize(
+    "content,old_string,new_string",
+    [
+        ("```\ncode\n```", "\n```",
+         "\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |"),
+        ("Intro.\n\n```\ncode\n```\n\nTail.", "code\n```",
+         "code\n```\n\n| a | b |\n| --- | --- |\n| 1 | 2 |"),
+    ],
+    ids=["append-on-closing-fence", "splice-from-inside-fence"],
+)
+async def test_edit_document_table_after_closing_fence_becomes_object(
+    collab_project, _clear_sessions, content, old_string, new_string,
+):
+    """A splice whose new_text carries the doc's closing fence line (the
+    append tail anchor on a doc ending in a code block) and then a table: the
+    fence is judged on the text as it will stand, so the table converts."""
+    from agent.tool_api_surface import apply_edits_to_document
+    from collab.registry import _session_key, _sessions
+
+    from table_serialize import capture_tables_json
+    from ydoc_store import load as load_ydoc
+    from ydoc_store import set_content
+
+    pid, doc_id, _at, _ut, admin_uid, _uu = collab_project
+    await set_content(doc_id, content, persist=True)
+    _sessions.pop(_session_key("doc", doc_id), None)
+
+    result = await apply_edits_to_document(
+        doc_id=doc_id, project_id=pid, user={"user_id": admin_uid},
+        edits=[{"old_string": old_string, "new_string": new_string}],
+    )
+
+    (table_id,) = [t["table_id"] for t in result["tables"]]
+    doc = await load_ydoc(doc_id)
+    live = str(doc.get("content", type=Y.Text))
+    assert f"```\n\n![Table](table:{table_id})" in live
+    assert "| 1 | 2 |" not in live
+    assert json.loads(capture_tables_json(doc))[table_id]["rows"] == [["a", "b"], ["1", "2"]]
+
+
 # TEST-WHY: cross-process-contract — an authored cell over the cap answers 400 and no row exists in the real store.
 async def test_agent_create_oversize_table_cell_400_writes_nothing(
     test_db, project_with_doc,

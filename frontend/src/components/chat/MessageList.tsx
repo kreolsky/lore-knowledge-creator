@@ -9,6 +9,7 @@ import { useChatStore, selectBranchPath } from '../../store/chat-store';
 import type { ChatMessage } from '../../types';
 import type { TurnNodeLike } from './MessageBubble/internal/turn-nodes';
 import { useAppStore } from '../../store/app-store';
+import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { useTranslation, t as translate } from '../../i18n';
 import { PanelLoading, Button } from '../ui';
 import { apiClient } from '../../api/client';
@@ -128,6 +129,7 @@ export function MessageList() {
   const messagesError = useChatStore(s => s.messagesError);
   const chatScopeLoading = useChatStore(s => s.chatScopeLoading);
   const activeSessionId = useChatStore(s => s.activeSessionId);
+  const chatMode = useUIStore(selectChatMode);
   // The memory and the auto-recall this chat received — their rows sit before
   // the user message of the turn that brought them (memory first, as in the
   // agent's context).
@@ -531,7 +533,8 @@ export function MessageList() {
   // An empty conversation (fresh branch included) is the chat picker, not an
   // error state.
   if (activePath.length === 0) {
-    return <ChatEmptyList />;
+    // Chat mode shows the picker in its left panel — the center keeps an empty area.
+    return chatMode ? <div className="flex-1" /> : <ChatEmptyList />;
   }
 
   // WHY: overflow-anchor must be OFF on this container — the browser's native
@@ -543,6 +546,9 @@ export function MessageList() {
   return (
     <div className="relative flex-1 flex min-h-0">
       <div ref={attachContainer} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
+        {/* WHY chat mode reads --content-max-width: the chat column follows the document's
+            text width and its Ctrl+Alt+[ / ] presets (useTextWidthHotkey). */}
+        <div className={chatMode ? 'mx-auto px-3 max-w-[var(--content-max-width)]' : undefined}>
         {activePath.map((msg, idx) => (
           <Fragment key={msg.message_id}>
           {memory && activeSessionId && msg.message_id === memory.message_id && (
@@ -565,6 +571,7 @@ export function MessageList() {
           />
           </Fragment>
         ))}
+        </div>
       </div>
       <PromptRail items={railItems} containerRef={containerRef} sessionId={activeSessionId} onJump={jumpToUser} />
     </div>
