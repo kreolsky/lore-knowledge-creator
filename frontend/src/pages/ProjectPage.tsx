@@ -288,6 +288,8 @@ export function ProjectPage() {
     const { draft, setDraft } = useChatStore.getState();
     setDraft(draft ? `${draft}\n\n${block}` : block);
     useChatStore.setState({ pendingInputFocus: true });
+    // WHY: chat mode renders the chat in the centre — opening the right panel would duplicate it.
+    if (chatModeRef.current) return;
     shellRef.current?.openRightPanel('chat');
   }, []));
 
@@ -353,10 +355,8 @@ export function ProjectPage() {
     { tab: 'docs', icon: <FileText size={15} />, title: t('tabDocuments'), renderPanel: () => <Sidebar /> },
     { tab: 'toc', icon: <List size={15} />, title: t('tabTableOfContents'), renderPanel: () => <TableOfContents /> },
   ];
-  // Chat mode (the chats left tab): offered on a desktop layout to whoever has the chat tab.
-  // Ruling: a phone keeps docs mode only (see selectChatMode).
-  const compactLayout = useUIStore(s => s.compactLayout);
-  const offersChatMode = !compactLayout && canAi && accessLevel !== 'readonly';
+  // Chat mode (the chats left tab): offered to whoever has the chat tab.
+  const offersChatMode = canAi && accessLevel !== 'readonly';
   if (offersChatMode) {
     leftTabs.push({ tab: 'chats', icon: <MessageSquareText size={15} />, title: t('tabChats'), renderPanel: () => <ChatModeList /> });
   }
@@ -435,7 +435,7 @@ export function ProjectPage() {
     : null;
 
   // Chat mode's right panel: the document (kept mounted — DocumentPage commits the URL
-  // document whatever tab is shown), search, settings. Notes, materials, history and links
+  // document whatever tab is shown) and settings. Search, notes, materials, history and links
   // are not in chat mode (operator ruling).
   const renderDocumentBody = () => hasDocument ? (
     // WHY above the Outlet: one docked bar spans both split columns and serves
@@ -456,7 +456,7 @@ export function ProjectPage() {
     </div>
   ) : renderDocumentBody();
   const chatModeTabs: RightTabEntry[] = rightTabs
-    .filter(entry => entry.tab === 'search' || entry.tab === 'settings');
+    .filter(entry => entry.tab === 'settings');
   chatModeTabs.unshift({ tab: 'doc', icon: <FileText size={15} />, title: t('tabDocument'), renderPanel: renderDocument, keepMounted: true });
   const chatModeTab: ShellTab = chatModeTabs.some(entry => entry.tab === chatModeRightTab) ? chatModeRightTab : 'doc';
 

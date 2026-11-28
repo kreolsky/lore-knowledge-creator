@@ -33,7 +33,7 @@ export type { RightTab, RememberedTab, EphemeralTab, MainEntity, DocumentUIState
 /** The left tab: the doc tree, the table of contents, or chat mode (the chat list). */
 export type SidebarTab = 'docs' | 'toc' | 'chats';
 /** Chat mode's right-panel tabs — MODE state, independent of the per-document RightTab. */
-export type ChatModeTab = 'doc' | 'search' | 'settings';
+export type ChatModeTab = 'doc' | 'settings';
 
 interface PersistedUIState {
   sidebarTab: SidebarTab;
@@ -75,7 +75,8 @@ export const UI_DEFAULTS: PersistedUIState = {
   lastActiveChatSessionId: null,
   soundEnabled: false,
   chatModeRightTab: 'doc',
-  chatModeRightOpen: true,
+  // WHY closed: entering chat mode shows the chat list and the chat only; the document panel is opened on demand (operator ruling).
+  chatModeRightOpen: false,
   chatDocPinned: false,
 };
 
@@ -227,6 +228,7 @@ function triggerSaveGlobalPrefs(state: UIState) {
     adminSectionTab: state.adminSectionTab,
     cabinetSectionTab: state.cabinetSectionTab,
     sidebarPinned: state.sidebarPinned,
+    chatsSidebarPinned: state.chatsSidebarPinned,
     colorOverrides: state.colorOverrides,
     soundPreset: state.soundPreset,
   };
@@ -254,6 +256,8 @@ export interface UIState {
   showArchived: boolean;
   // Left panel docked (true) or auto-hiding on hover (global-persisted).
   sidebarPinned: boolean;
+  // Chat-mode pin (global-persisted); null = inherit sidebarPinned.
+  chatsSidebarPinned: boolean | null;
   // Admin panel's last-open section (global-persisted per user; see
   // theme-slice GlobalPrefs). The aside WIDTH is not a section field: it is
   // panelWidths.left — ONE width shared with the project sidebar (no jump in
@@ -340,6 +344,7 @@ export interface UIState {
   getSplitRatio: () => number;
   setShowArchived: (showArchived: boolean) => void;
   setSidebarPinned: (pinned: boolean) => void;
+  setChatsSidebarPinned: (pinned: boolean) => void;
   // Per-theme user color overrides (global-persisted; see theme-slice GlobalPrefs).
   colorOverrides: ColorOverrides;
   setColorOverride: (theme: ThemeName, token: string, value: string | null) => void;
@@ -395,7 +400,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   lastMoveTargetProjectId: null,
   soundEnabled: false,
   chatModeRightTab: 'doc',
-  chatModeRightOpen: true,
+  chatModeRightOpen: false,
   chatDocPinned: false,
   findSeedText: '',
   compactLayout: compactMql?.matches ?? false,
@@ -472,7 +477,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       searchDocMode: (merged.searchDocMode as SearchDocMode) ?? 'fulltext',
       soundEnabled: merged.soundEnabled ?? false,
       chatModeRightTab: merged.chatModeRightTab ?? 'doc',
-      chatModeRightOpen: merged.chatModeRightOpen ?? true,
+      chatModeRightOpen: merged.chatModeRightOpen ?? false,
       chatDocPinned: merged.chatDocPinned ?? false,
       documentPositions: serverDocPositions,
     });
@@ -534,7 +539,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       lastMoveTargetProjectId: null,
       soundEnabled: false,
       chatModeRightTab: 'doc' as const,
-      chatModeRightOpen: true,
+      chatModeRightOpen: false,
       chatDocPinned: false,
       searchQuery: '',
       searchResults: [],
@@ -558,8 +563,7 @@ export function useDocState(docId: string | null | undefined): DocumentUIState {
   return useUIStore(s => s.documents[docId ?? ORPHAN_KEY] ?? DEFAULT_DOC_STATE);
 }
 
-/** Chat mode is on: the chats left tab, on a desktop layout of the authed project page.
- * WHY compact is excluded: a phone keeps docs mode only — three panes do not fit, and the
- * chats tab is not offered there (ProjectPage), so a persisted 'chats' reads as docs. */
+/** Chat mode is on: the chats left tab of the authed project page. On a phone the chat list is
+ * the drawer and the document the full-screen right panel, the same as docs mode's panes. */
 export const selectChatMode = (s: UIState): boolean =>
-  s.sidebarTab === 'chats' && !s.compactLayout && !s.isPublicShare;
+  s.sidebarTab === 'chats' && !s.isPublicShare;

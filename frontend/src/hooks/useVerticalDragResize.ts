@@ -7,6 +7,8 @@ interface UseVerticalDragResizeOptions {
   defaultHeight: number;
   minHeight: number;
   maxHeight: number;
+  /** localStorage key; when set, the dragged height persists and replaces defaultHeight on load. */
+  storageKey?: string;
 }
 
 interface UseVerticalDragResizeReturn {
@@ -16,10 +18,26 @@ interface UseVerticalDragResizeReturn {
 }
 
 export function useVerticalDragResize(options: UseVerticalDragResizeOptions): UseVerticalDragResizeReturn {
-  const { defaultHeight, minHeight, maxHeight } = options;
+  const { defaultHeight, minHeight, maxHeight, storageKey } = options;
 
   const [height, setHeightState] = useState<number>(defaultHeight);
   const heightRef = useRef<number>(defaultHeight);
+  const storageKeyRef = useRef(storageKey);
+  storageKeyRef.current = storageKey;
+
+  // WHY: re-resolve when the key/default changes (the composer switches modes without remounting).
+  // A stored value means the user dragged it; otherwise the default applies.
+  useEffect(() => {
+    let stored: number | null = null;
+    try {
+      const raw = storageKey ? localStorage.getItem(storageKey) : null;
+      stored = raw ? Number(raw) : null;
+    } catch { /* storage unavailable: the default applies */ }
+    const initial = stored && Number.isFinite(stored) ? stored : defaultHeight;
+    const clamped = Math.min(maxHeight, Math.max(minHeight, initial));
+    heightRef.current = clamped;
+    setHeightState(clamped);
+  }, [storageKey, defaultHeight, minHeight, maxHeight]);
   const handleRef = useRef<HTMLDivElement | null>(null);
   const dragging = useRef(false);
   const startY = useRef(0);
@@ -62,6 +80,9 @@ export function useVerticalDragResize(options: UseVerticalDragResizeOptions): Us
       document.body.classList.remove('is-resizing');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      const key = storageKeyRef.current;
+      if (!key) return;
+      try { localStorage.setItem(key, String(heightRef.current)); } catch { /* not persisted: per-viewer convenience */ }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);

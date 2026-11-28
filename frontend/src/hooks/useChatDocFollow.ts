@@ -15,6 +15,11 @@ let expectedDocId: string | null = null;
 // land before the list update) — opened once the list carries it.
 let pendingDocId: string | null = null;
 
+/** The current document change was made by the follow, not by the user (read before the pin effect runs). */
+export function isFollowNavigation(docId: string | null): boolean {
+  return docId !== null && docId === expectedDocId;
+}
+
 function followTo(docId: string, navigate: NavigateFunction): void {
   const state = useAppStore.getState();
   pendingDocId = null;

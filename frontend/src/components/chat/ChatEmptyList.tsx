@@ -1,11 +1,11 @@
-/** Top-pinned, scrolling list of existing chats shown on the empty chat screen. Renders ALL sessions (project-wide, pure time sort); the container scrolls natively. */
+/** Top-pinned, scrolling list of existing chats shown on the empty chat screen. Renders ALL sessions (project-wide, pure time sort), or only the title matches of `titleQuery` with `footer` below them; the container scrolls natively. */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { useChatStore } from '../../store/chat-store';
 import { useAppStore } from '../../store/app-store';
 import { PillList, type ListPillActiveColor } from '../ui';
 import { ChatRow } from './ChatRow';
-import { useSortedSessions } from './useSortedSessions';
+import { filterSessionsByTitle, useSortedSessions } from './useSortedSessions';
 import { useTranslation } from '../../i18n';
 import { HoverPreviewPopup } from '../HoverPreviewPopup';
 import { useDocumentPreview } from '../../hooks/useDocumentPreview';
@@ -17,9 +17,19 @@ import { getLeftPanelPopupLeft, getRightPanelPopupLeft, RIGHT_PANEL_PREVIEW_SHIF
 import { useUIStore, selectChatMode } from '../../store/ui-store';
 import { useChatUnavailable } from './ChatUnavailableNotice';
 
-export function ChatEmptyList({ activeColor }: { activeColor?: ListPillActiveColor } = {}) {
+interface ChatEmptyListProps {
+  activeColor?: ListPillActiveColor;
+  /** Non-blank: only chats whose title matches, in the same order. */
+  titleQuery?: string;
+  /** Rendered after the rows inside the same scroll container. */
+  footer?: ReactNode;
+}
+
+export function ChatEmptyList({ activeColor, titleQuery = '', footer }: ChatEmptyListProps = {}) {
   // Pure last-activity sort of ALL sessions.
   const sorted = useSortedSessions();
+  const searching = titleQuery.trim() !== '';
+  const rows = useMemo(() => searching ? filterSessionsByTitle(sorted, titleQuery) : sorted, [searching, sorted, titleQuery]);
   const { t } = useTranslation();
   const activeSessionId = useChatStore(s => s.activeSessionId);
   const setActiveSession = useChatStore(s => s.setActiveSession);
@@ -143,7 +153,7 @@ export function ChatEmptyList({ activeColor }: { activeColor?: ListPillActiveCol
   return (
     <div className="flex-1 flex flex-col overflow-hidden relative">
       <PillList ref={containerRef} className="min-h-0 list-scroll">
-        {sorted.map((s) => (
+        {rows.map((s) => (
           <ChatRow
             key={s.session_id}
             session={s}
@@ -158,6 +168,7 @@ export function ChatEmptyList({ activeColor }: { activeColor?: ListPillActiveCol
             onBodyHoverLeave={hover.handleHoverLeave}
           />
         ))}
+        {footer}
       </PillList>
       <HoverPreviewPopup
         hover={hover}

@@ -12,7 +12,7 @@ import { useAppStore } from '../store/app-store';
 import { useUIStore } from '../store/ui-store';
 import { useChatStore } from '../store/chat-store';
 import { isChatScopeLoaded, markChatScopeLoaded } from '../chat/scope-tracker';
-import { apiClient, ForbiddenError } from '../api/client';
+import { apiClient } from '../api/client';
 import { emit } from '../events';
 import { formatDate } from '../utils/format';
 import { listHiddenDocIds } from '../utils/document-sort';
@@ -20,14 +20,9 @@ import { ChatSearchHit, ChatSession, SearchMode, SearchResult, SearchSnapshot, S
 import { FieldInput, FieldCheckbox, Button, ListPill, PillList } from './ui';
 import { useTranslation } from '../i18n';
 import { filterSessionsByTitle, useChatListPosition } from './chat/useSortedSessions';
+import { CHAT_SEARCH_MIN_CHARS, ChatSearchHitPill, fetchChatHits, isChatRecallDisabled } from './chat/chat-search';
 
-// The chat-search route's 403 while the administrator switched the chat-recall
-// skill off — told apart from "No access to this project" by its detail.
-const CHAT_RECALL_DISABLED_DETAIL = 'chat-recall is disabled by the administrator';
-const isChatRecallDisabled = (err: unknown) =>
-  err instanceof ForbiddenError && err.detail === CHAT_RECALL_DISABLED_DETAIL;
-
-const MIN_CHARS: Record<SearchMode, number> = { fulltext: 3, semantic: 2, chats: 2 };
+const MIN_CHARS: Record<SearchMode, number> = { fulltext: 3, semantic: 2, chats: CHAT_SEARCH_MIN_CHARS };
 
 // Everything a request is made from: the open document is the narrow's root and
 // the chats anchor, so it is part of the key in every mode.
@@ -123,16 +118,9 @@ export function SearchPanel() {
         .catch(() => { setError(true); })
         .finally(() => setLoading(false));
     } else if (currentMode === 'chats') {
-      const params = new URLSearchParams({ q: value });
-      // The anchor is the document open at request time. Unchecked: the whole
-      // project by relevance, chats under the anchor marked. Checked: only chats
-      // attached to the anchor or its subtree.
-      const anchorId = useAppStore.getState().currentDocument?.document_id;
-      params.set('scope', scopeThisDoc && anchorId ? 'siblings' : 'project');
-      if (anchorId) params.set('anchor_document_id', anchorId);
-      apiClient
-        .get(`/projects/${projectId}/chat-search?${params}`)
-        .then((data: { hits: ChatSearchHit[] }) => { setChatHits(data.hits); remember({ chatHits: data.hits }); })
+      // The anchor is the document open at request time.
+      fetchChatHits(projectId, value, useAppStore.getState().currentDocument?.document_id, scopeThisDoc)
+        .then(hits => { setChatHits(hits); remember({ chatHits: hits }); })
         .catch((err: unknown) => { setChatsDisabled(isChatRecallDisabled(err)); setError(true); })
         .finally(() => setLoading(false));
     } else {
@@ -517,38 +505,7 @@ export function SearchPanel() {
         })}
 
         {mode === 'chats' && !loading && chatHits.map((h: ChatSearchHit) => (
-          <ListPill
-            key={`${h.chat_id}-${h.message_id}`}
-            variant="plain"
-            data-chat-hit={h.message_id}
-            data-sibling={h.sibling ? 'true' : undefined}
-            onClick={() => { void openChatHit(h); }}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-ui-base font-semibold text-text overflow-hidden text-ellipsis whitespace-nowrap">
-                {h.chat_title}
-              </span>
-              <span className="flex items-center gap-1.5 shrink-0">
-                {h.sibling && (
-                  <span className="text-ui-xs text-accent-text" title={t('chatSearchSiblingTip')}>
-                    {t('chatSearchSibling')}
-                  </span>
-                )}
-                {h.created_at && (
-                  <span className="text-ui-xs text-text-dim">{formatDate(h.created_at)}</span>
-                )}
-                <span className="text-ui-xs text-text-dim bg-surface3 py-px px-1.5">
-                  {(h.score * 100).toFixed(0)}%
-                </span>
-              </span>
-            </div>
-            {h.question && (
-              <div className="text-ui-xs text-text-dim mt-0.5 italic line-clamp-1">{h.question}</div>
-            )}
-            <div className="text-xs text-text-dim mt-1.5 leading-relaxed line-clamp-3">
-              {h.snippet}
-            </div>
-          </ListPill>
+          <ChatSearchHitPill key={`${h.chat_id}-${h.message_id}`} hit={h} onOpen={hit => { void openChatHit(hit); }} />
         ))}
       </PillList>
     </div>

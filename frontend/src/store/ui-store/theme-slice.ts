@@ -17,9 +17,9 @@ import { DEFAULT_SOUND_PRESET, isSoundChoice, type SoundChoice } from '../../uti
 export type ThemeSlice = Pick<
   UIState,
   | 'theme' | 'colorOverrides' | 'language' | 'panelWidths' | 'splitRatio' | 'globalPrefsLoaded'
-  | 'showArchived' | 'adminSectionTab' | 'cabinetSectionTab' | 'sidebarPinned'
+  | 'showArchived' | 'adminSectionTab' | 'cabinetSectionTab' | 'sidebarPinned' | 'chatsSidebarPinned'
   | 'setTheme' | 'setLanguage' | 'setPanelWidth' | 'setSplitRatio' | 'getSplitRatio' | 'loadGlobalPrefs'
-  | 'setShowArchived' | 'setAdminSectionTab' | 'setCabinetSectionTab' | 'setSidebarPinned'
+  | 'setShowArchived' | 'setAdminSectionTab' | 'setCabinetSectionTab' | 'setSidebarPinned' | 'setChatsSidebarPinned'
   | 'setColorOverride' | 'replaceColorOverrides' | 'flushColorSave'
   | 'soundPreset' | 'setSoundPreset'
 >;
@@ -79,6 +79,9 @@ export interface GlobalPrefs {
   cabinetSectionTab: CabinetSectionTab | null;
   // WHY: global like panelWidths — docked vs auto-hiding left panel is a layout habit.
   sidebarPinned: boolean;
+  // WHY: chat mode keeps its own pin; null = never set, falls back to sidebarPinned
+  // (same shape as panelWidths.chatsLeft ?? left).
+  chatsSidebarPinned: boolean | null;
   // INVARIANT(persisted): sparse per-theme map token → color; reset = key deleted.
   // Why: defaults stay in index.css, so a later palette change reaches every token
   // the user did not touch. Loaded raw-then-sanitized (the server does not validate).
@@ -97,6 +100,7 @@ const GLOBAL_DEFAULTS: GlobalPrefs = {
   adminSectionTab: null,
   cabinetSectionTab: null,
   sidebarPinned: true,
+  chatsSidebarPinned: null,
   colorOverrides: { light: {}, dark: {} },
   soundPreset: DEFAULT_SOUND_PRESET,
 };
@@ -141,6 +145,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     adminSectionTab: null,
     cabinetSectionTab: null,
     sidebarPinned: true,
+    chatsSidebarPinned: null,
     // WHY: same reason as theme above — keep what theme-boot.js painted until prefs load.
     colorOverrides: readCachedColors(),
     soundPreset: DEFAULT_SOUND_PRESET,
@@ -162,6 +167,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
     setAdminSectionTab: (tab) => { set({ adminSectionTab: tab }); get().saveGlobalPrefsNow(); },
     setCabinetSectionTab: (tab) => { set({ cabinetSectionTab: tab }); get().saveGlobalPrefsNow(); },
     setSidebarPinned: (sidebarPinned) => { set({ sidebarPinned }); get().saveGlobalPrefsNow(); },
+    setChatsSidebarPinned: (chatsSidebarPinned) => { set({ chatsSidebarPinned }); get().saveGlobalPrefsNow(); },
     setSoundPreset: (soundPreset) => { set({ soundPreset }); get().saveGlobalPrefsNow(); },
     setColorOverride: (theme, token, value) => {
       set(prev => {
@@ -211,6 +217,7 @@ export function createThemeSlice(set: UISet, get: UIGet): ThemeSlice {
             adminSectionTab: data.adminSectionTab ?? null,
             cabinetSectionTab: data.cabinetSectionTab ?? null,
             sidebarPinned: data.sidebarPinned ?? GLOBAL_DEFAULTS.sidebarPinned,
+            chatsSidebarPinned: data.chatsSidebarPinned ?? GLOBAL_DEFAULTS.chatsSidebarPinned,
             colorOverrides: sanitizeOverrides(data.colorOverrides),
             soundPreset: isSoundChoice(data.soundPreset) ? data.soundPreset : GLOBAL_DEFAULTS.soundPreset,
             globalPrefsLoaded: true,

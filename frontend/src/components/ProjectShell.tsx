@@ -32,6 +32,8 @@ import { useDocumentNavigation } from '../navigation/useDocumentNavigation';
 import { useUIStore, type ChatModeTab, type RightTab, type SidebarTab } from '../store/ui-store';
 import { useNoteStore } from '../store/note-store';
 import { useAppStore } from '../store/app-store';
+import { useChatStore } from '../store/chat-store';
+import { isFollowNavigation } from '../hooks/useChatDocFollow';
 import { useTranslation } from '../i18n';
 import { Header } from './Header';
 import { UserControls } from './UserControls';
@@ -157,15 +159,26 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   // layout. One value makes "only one open" structural.
   const compact = useUIStore(s => s.compactLayout);
   const [compactPanel, setCompactPanel] = useState<'none' | 'left' | 'right'>('none');
+  const compactChatModeRef = useRef(false);
   const docKey = useAppStore(s => s.currentDocument?.document_id ?? null);
   const refKey = useAppStore(s => s.currentReference?.reference_id ?? null);
   const tableKey = useAppStore(s => s.currentTable);
   const currentDocTitle = useAppStore(s => s.currentDocument?.title ?? null);
   const currentProjectName = useAppStore(s => s.currentProject?.name ?? null);
   const publicProjectName = useUIStore(s => s.publicProjectName);
-  // Whatever opens an entity in the center (tree pick, link in chat, a reference)
+  const activeChatId = useChatStore(s => s.activeSessionId);
+  const prevCompactDocRef = useRef(docKey);
+  // Whatever opens an entity in the center (tree pick, link in chat, a reference, a chat pick)
   // closes the compact panel — one rule, no per-call-site wiring.
-  useEffect(() => { setCompactPanel('none'); }, [docKey, refKey, tableKey]);
+  // Chat mode's document lives in the right panel: a document the user opened (a link in the
+  // chat, the tree) shows it; the follow of the agent's writes loads it without opening.
+  // WHY this effect sees expectedDocId still set: the Shell's effects run before ProjectPage's.
+  useEffect(() => {
+    const previous = prevCompactDocRef.current;
+    prevCompactDocRef.current = docKey;
+    const userOpenedDoc = docKey !== previous && previous !== null && !isFollowNavigation(docKey);
+    setCompactPanel(compactChatModeRef.current && userOpenedDoc ? 'right' : 'none');
+  }, [docKey, refKey, tableKey, activeChatId]);
 
   // ── Store reads (panel state) ────────────────────────────────────────────
   const sidebarTab = useUIStore(s => s.sidebarTab);
@@ -194,6 +207,7 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   // WHY its own open flag (chatModeRightOpen): the panel is the mode's second window, and the
   // per-document rightPanelOpen would open/close it on every navigation of that document.
   const chatMode = effectiveSidebarTab === 'chats';
+  compactChatModeRef.current = compact && chatMode;
   const setChatModeRightTab = useUIStore(s => s.setChatModeRightTab);
   const chatModeRightOpen = useUIStore(s => s.chatModeRightOpen);
   const setChatModeRightOpen = useUIStore(s => s.setChatModeRightOpen);
@@ -220,8 +234,13 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
   const sidebarOpen = sidebarOpenStored;
 
   // ── Auto-hiding left panel (unpinned, desktop only) ─────────────────────
-  const sidebarPinned = useUIStore(s => s.sidebarPinned);
-  const setSidebarPinned = useUIStore(s => s.setSidebarPinned);
+  // WHY: each center mode keeps its own pin; chat mode inherits the docs pin until set.
+  const docsSidebarPinned = useUIStore(s => s.sidebarPinned);
+  const chatsSidebarPinned = useUIStore(s => s.chatsSidebarPinned);
+  const setDocsSidebarPinned = useUIStore(s => s.setSidebarPinned);
+  const setChatsSidebarPinned = useUIStore(s => s.setChatsSidebarPinned);
+  const sidebarPinned = chatMode ? chatsSidebarPinned ?? docsSidebarPinned : docsSidebarPinned;
+  const setSidebarPinned = chatMode ? setChatsSidebarPinned : setDocsSidebarPinned;
   const floating = !compact && !sidebarPinned;
   // INVARIANT: while floating only hoverOpen changes — the per-project sidebarOpen is never written.
   // Why: re-pinning must restore the docked state the user had before unpinning.
@@ -527,11 +546,12 @@ export const ProjectShell = forwardRef<ProjectShellHandle, ProjectShellProps>(fu
         <div className="resizer resizer--right" ref={rightPanelResizer.resizerRef} />
       )}
 
-      {hasRight && (!compact || rightIsOpen) && (
+      {/* WHY chat mode keeps it mounted on a phone too: see the keep-mounted aside below. */}
+      {hasRight && (!compact || rightIsOpen || chatMode) && (
         <div
           data-testid="shell-right"
           className={compact
-            ? 'fixed inset-0 z-[31] flex flex-col bg-bg'
+            ? `fixed inset-0 z-[31] flex-col bg-bg ${rightIsOpen ? 'flex' : 'hidden'}`
             : `flex flex-col shrink-0 h-full ${!rightIsOpen ? 'absolute right-0 top-0 z-[13] pointer-events-none' : ''}`}
           style={{ width: !compact && rightIsOpen ? rightPanelResizer.width : undefined }}
           onDragEnter={onPanelDragEnter}

@@ -130,6 +130,7 @@ export function MessageList() {
   const chatScopeLoading = useChatStore(s => s.chatScopeLoading);
   const activeSessionId = useChatStore(s => s.activeSessionId);
   const chatMode = useUIStore(selectChatMode);
+  const compactLayout = useUIStore(s => s.compactLayout);
   // The memory and the auto-recall this chat received — their rows sit before
   // the user message of the turn that brought them (memory first, as in the
   // agent's context).
@@ -547,8 +548,9 @@ export function MessageList() {
     <div className="relative flex-1 flex min-h-0">
       <div ref={attachContainer} onScroll={handleScroll} className="chat-selection chat-scroll [overflow-anchor:none] flex-1 min-w-0 overflow-y-auto px-3 py-3">
         {/* WHY chat mode reads --content-max-width: the chat column follows the document's
-            text width and its Ctrl+Alt+[ / ] presets (useTextWidthHotkey). */}
-        <div className={chatMode ? 'mx-auto px-3 max-w-[var(--content-max-width)]' : undefined}>
+            text width and its Ctrl+Alt+[ / ] presets (useTextWidthHotkey).
+            WHY no inner padding on a phone: the messages line up with the composer's px-3. */}
+        <div className={chatMode ? `mx-auto max-w-[var(--content-max-width)]${compactLayout ? '' : ' px-3'}` : undefined}>
         {activePath.map((msg, idx) => (
           <Fragment key={msg.message_id}>
           {memory && activeSessionId && msg.message_id === memory.message_id && (

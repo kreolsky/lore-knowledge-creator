@@ -1301,7 +1301,8 @@ html.dark .right-panel--notes-thread input:not([type=checkbox]):not([type=radio]
   width: 0;
   flex-shrink: 0;
   cursor: col-resize;
-  z-index: 14;
+  /* WHY: above .resizer-v (14) — a panel's edge handle must win where it meets the chat input's row resizer. */
+  z-index: 15;
   overflow: visible;
   will-change: transform;
   /* Claim the drag gesture so the browser doesn't scroll/select while resizing by touch. */

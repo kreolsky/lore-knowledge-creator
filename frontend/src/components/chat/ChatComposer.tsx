@@ -108,9 +108,10 @@ export function ChatComposer({
   const compactLayout = useUIStore(s => s.compactLayout);
   const chatMode = useUIStore(selectChatMode);
   const { height: inputHeight, handleRef: dragHandleRef } = useVerticalDragResize({
-    defaultHeight: 300,
     // WHY: on a wide layout the form never shrinks below 200 (a compact layout sizes it by a two-row textarea).
-    // Why: the min-height (200) is the floor the form can't shrink below; the default (300) opens taller and drags down to 200 but no further.
+    // Chat-in-center opens at that floor and remembers a height the user dragged; elsewhere it opens at 300.
+    defaultHeight: chatMode ? 200 : 300,
+    storageKey: chatMode ? 'lore.chatComposerHeight.chatMode' : undefined,
     minHeight: 200,
     maxHeight: 600,
   });
